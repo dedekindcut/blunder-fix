@@ -580,9 +580,15 @@ async function handleImportPgn(options) {
   for (let i = 0; i < games.length; i += 1) {
     const pgn = games[i];
     const headers = parsePgnHeaders(pgn);
-    const baseId = String(headers.Site || headers.Link || headers.LichessURL || headers['Chess.com'] || '');
-    const sourceGameId = baseId || `pgn-${hashString32(pgn)}`;
-    const exists = stateCache.games.some((x) => x.source === 'pgn' && lower(x.username) === username && x.source_game_id === sourceGameId);
+    const pgnHash = hashString32(pgn);
+    const sourceGameId = `pgn-${pgnHash}`;
+    const exists = stateCache.games.some((x) => {
+      if (!(x.source === 'pgn' && lower(x.username) === username)) return false;
+      const existingHash = String(x.pgn_hash || '').trim();
+      if (existingHash) return existingHash === pgnHash;
+      if (String(x.source_game_id || '') === sourceGameId) return true;
+      return String(x.pgn || '') === pgn;
+    });
     if (exists) {
       skipped += 1;
       continue;
@@ -592,6 +598,7 @@ async function handleImportPgn(options) {
       id: nextId('game'),
       source: 'pgn',
       source_game_id: sourceGameId,
+      pgn_hash: pgnHash,
       username,
       played_color: playedColor,
       result: resultFromPgn(pgn, playedColor),
@@ -770,6 +777,8 @@ function handleReviewNext(url, username) {
   const first = rows[0];
   if (!first) return toJsonResponse({ card: null });
   const game = stateCache.games.find((g) => g.id === first.position.game_id);
+  const gameHeaders = parsePgnHeaders(game?.pgn || '');
+  const sourceUrl = String(gameHeaders.Site || gameHeaders.Link || '').trim();
   const lines = stateCache.candidate_lines
     .filter((l) => l.position_id === first.position.id)
     .sort((a, b) => Number(a.pv_rank) - Number(b.pv_rank))
@@ -784,6 +793,7 @@ function handleReviewNext(url, username) {
   return toJsonResponse({
     card: {
       card_id: first.card.id,
+      ply: Number(first.position.ply || 0),
       fen: first.position.fen,
       side_to_move: first.position.side_to_move,
       loss_cp: first.position.loss_cp,
@@ -791,6 +801,7 @@ function handleReviewNext(url, username) {
       played_san: first.position.played_san,
       source: game?.source || '',
       source_game_id: game?.source_game_id || '',
+      source_url: sourceUrl,
       best_cp: first.position.best_cp,
       played_cp: first.position.played_cp,
       judgement: first.position.judgement || '',

@@ -902,6 +902,42 @@ function setGradeButtonsDefault() {
   }
 }
 
+function buildSourceGameUrl(card) {
+  if (!card) return '';
+  const src = String(card.source || '').toLowerCase();
+  if (src === 'pgn') return '';
+  const id = String(card.source_game_id || '').trim();
+  const sourceUrl = String(card.source_url || '').trim();
+  const ply = Number(card.ply || 0);
+  const targetPly = ply > 0 ? Math.max(1, ply - 2) : 0;
+  const isAbsoluteHttpUrl = /^https?:\/\//i.test(sourceUrl);
+
+  if (src === 'lichess') {
+    if (isAbsoluteHttpUrl) return `${sourceUrl}${targetPly > 0 ? `#${targetPly}` : ''}`;
+    if (!id) return '';
+    return `https://lichess.org/${encodeURIComponent(id)}${targetPly > 0 ? `#${targetPly}` : ''}`;
+  }
+
+  if (src === 'chesscom') {
+    const gameIdMatch =
+      sourceUrl.match(/(?:^https?:\/\/(?:www\.)?chess\.com\/(?:analysis\/)?game\/live\/)(\d+)/i) ||
+      id.match(/(?:^https?:\/\/(?:www\.)?chess\.com\/(?:analysis\/)?game\/live\/)(\d+)/i) ||
+      id.match(/^(\d+)$/);
+    if (gameIdMatch?.[1]) {
+      const base = `https://www.chess.com/analysis/game/live/${gameIdMatch[1]}/analysis`;
+      return targetPly > 0 ? `${base}?move=${targetPly}` : base;
+    }
+    if (!isAbsoluteHttpUrl) return '';
+    if (targetPly > 0) {
+      const sep = sourceUrl.includes('?') ? '&' : '?';
+      return `${sourceUrl}${sep}move=${targetPly}`;
+    }
+    return sourceUrl;
+  }
+
+  return '';
+}
+
 async function refreshGradePreviewLabels() {
   if (!currentCard?.card_id) {
     setGradeButtonsDefault();
@@ -1422,6 +1458,8 @@ async function loadCard() {
     clearBoardDecorations();
     clearBoardOverlay();
     setPlayedMoveMetric(null);
+    const viewSourceBtn = $('viewSourceGame');
+    if (viewSourceBtn) viewSourceBtn.hidden = true;
     setGradeButtonsDefault();
     if (infoEl) infoEl.textContent = 'No due cards.';
     setReviewMoveStatus('No due cards.', 'idle');
@@ -1430,6 +1468,19 @@ async function loadCard() {
   await ensureBoardDeps();
   clearWrongResetTimer();
   currentCard = data.card;
+  {
+    const viewSourceBtn = $('viewSourceGame');
+    if (viewSourceBtn) {
+      const url = buildSourceGameUrl(currentCard);
+      viewSourceBtn.hidden = !url;
+      const txt = viewSourceBtn.querySelector('span');
+      if (txt) {
+        const ply = Number(currentCard?.ply || 0);
+        const targetPly = ply > 0 ? Math.max(1, ply - 2) : 0;
+        txt.textContent = targetPly > 0 ? `View Game (move ${targetPly})` : 'View Game';
+      }
+    }
+  }
   resetAttemptBox();
   setupBoard(currentCard);
   renderAttempts();
@@ -2198,6 +2249,14 @@ function wireReviewPage() {
       if (!currentCard?.fen) return;
       const fenPath = currentCard.fen.replaceAll(' ', '_');
       window.open(`https://lichess.org/analysis/${fenPath}`, '_blank', 'noopener,noreferrer');
+    });
+  }
+  const viewSourceBtn = $('viewSourceGame');
+  if (viewSourceBtn) {
+    viewSourceBtn.addEventListener('click', () => {
+      const url = buildSourceGameUrl(currentCard);
+      if (!url) return;
+      window.open(url, '_blank', 'noopener,noreferrer');
     });
   }
   for (const btn of document.querySelectorAll('.grade')) {

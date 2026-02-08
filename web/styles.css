@@ -16,6 +16,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   font-family: "Sora", "Avenir Next", "Segoe UI", sans-serif;
@@ -848,6 +852,11 @@ button:disabled {
 #openLichessAnalysis {
   border-color: rgba(169, 200, 233, 0.55);
   background: linear-gradient(160deg, rgba(81, 112, 164, 0.95), rgba(62, 86, 126, 0.96));
+}
+
+#viewSourceGame {
+  border-color: rgba(132, 223, 164, 0.55);
+  background: linear-gradient(160deg, rgba(58, 165, 95, 0.95), rgba(36, 132, 74, 0.96));
 }
 
 pre {
