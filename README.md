@@ -1,76 +1,38 @@
-# Blunder Fix (MVP)
+# Blunder Fix (Client-Side)
 
-Simple web app to:
+Browser-only chess blunder trainer:
 
-- import your games from Lichess and Chess.com
-- analyze positions quickly with Stockfish at low depth
-- use `MultiPV` to store multiple acceptable lines within a centipawn window
-- store practical opponent responses from real games
-- review blunders with a 4-button FSRS-style scheduler (`Again/Hard/Good/Easy`)
+- imports Lichess + Chess.com games directly in the browser
+- analyzes with browser Stockfish (`web/vendor/stockfish/stockfish.js`)
+- stores all state locally in IndexedDB (no server DB)
+- exports/imports state as JSON from the Import page
 
-## Stack
+## Run (pure static)
 
-- Backend: FastAPI + SQLite (`blunderfix.db`)
-- Analysis: `python-chess` + UCI Stockfish
-- Frontend: static HTML/JS + `chessground`
-
-## About chessground
-
-Yes, your assumption is correct: both `../maia-platform-frontend` and `../en-croissant` use `chessground`.
-
-This MVP uses `chessground` directly in the browser via ESM CDN for minimal setup. If you want, we can switch this to a local package setup next.
-
-## Quick start
-
-1. Install/sync dependencies with `uv`:
+From the repo root:
 
 ```bash
-uv sync
+cd web
+python3 -m http.server 8000
 ```
 
-2. Run API + web app:
+Then open:
 
-```bash
-uv run uvicorn app.main:app --reload --port 8000
-```
+- http://127.0.0.1:8000/index.html
+- http://127.0.0.1:8000/import.html
+- http://127.0.0.1:8000/analyze.html
+- http://127.0.0.1:8000/review.html
+- http://127.0.0.1:8000/stats.html
 
-3. Open:
+## Storage model
 
-- http://127.0.0.1:8000/import
-- http://127.0.0.1:8000/analyze
-- http://127.0.0.1:8000/review
+- Runtime data is in IndexedDB (`blunderfix-local`)
+- DB export/import uses JSON snapshots (Import page)
+- No FastAPI/API backend is required for normal use
 
-## Stockfish path
+## Stockfish
 
-Analyzer tries these in order:
+- Local-first worker path: `web/vendor/stockfish/stockfish.js`
+- Companion wasm: `web/vendor/stockfish/stockfish.wasm`
 
-1. `stockfish` in `$PATH`
-2. `../stockfish/stockfish-macos-m1-apple-silicon`
-
-You can override in API request with `stockfish_path`.
-
-## API summary
-
-- `POST /api/import/lichess`
-- `POST /api/import/chesscom`
-- `POST /api/analyze`
-- `GET /api/stats/{username}`
-- `GET /api/review/next/{username}`
-- `POST /api/review/grade`
-
-## Current scheduler
-
-`app/scheduler.py` implements an FSRS-style algorithm with:
-
-- stability
-- difficulty
-- elapsed time
-- 4-grade review updates
-
-It is intentionally lightweight and compatible with Anki-like review flow, but not a strict byte-for-byte reimplementation of Anki FSRS parameters. If you want strict parity, next step is to swap this module with a full FSRS implementation and keep the same DB/API shape.
-
-## Notes
-
-- Analysis throughput is controlled by `depth`, `multipv`, and number of games.
-- Blunders are currently positions where `best_cp - played_cp >= blunder_loss_cp`.
-- Practical response currently stores the actual next opponent move from the game and evaluation after that move.
+If local files are unavailable, CDN fallback is attempted.

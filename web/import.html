@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Blunder Fix • Import</title>
-    <link rel="stylesheet" href="/web/styles.css" />
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="app-wrap" data-page="import">
@@ -17,10 +17,10 @@
           </div>
         </div>
         <nav class="nav-pill">
-          <a class="active" href="/import">Import</a>
-          <a href="/analyze">Analyze</a>
-          <a href="/review">Review</a>
-          <a href="/stats">Stats</a>
+          <a class="active" href="./import.html">Import</a>
+          <a href="./analyze.html">Analyze</a>
+          <a href="./review.html">Review</a>
+          <a href="./stats.html">Stats</a>
         </nav>
       </header>
 
@@ -43,7 +43,7 @@
         <h2>Database</h2>
         <div class="row wrap">
           <button id="exportDbBtn">Export DB</button>
-          <input id="importDbFile" type="file" accept=".db,.sqlite,.sqlite3,application/x-sqlite3" />
+          <input id="importDbFile" type="file" accept=".json,application/json" />
           <button id="importDbBtn" class="danger-btn">Import DB</button>
         </div>
       </section>
@@ -61,6 +61,6 @@
         <pre id="log"></pre>
       </section>
     </main>
-    <script type="module" src="/web/app.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

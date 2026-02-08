@@ -1,3 +1,7 @@
+import { installLocalApi } from './local-api.js';
+
+installLocalApi();
+
 let ChessgroundCtor = null;
 let ChessCtor = null;
 
@@ -58,7 +62,7 @@ let sfQueue = Promise.resolve();
 let sfInitState = 'idle';
 let sfInitError = null;
 const SF_WORKER_CANDIDATES = [
-  '/web/vendor/stockfish/stockfish.js',
+  'vendor/stockfish/stockfish.js',
   'https://cdn.jsdelivr.net/npm/stockfish@17.1.0/src/stockfish-17.1-lite-single-03e3232.js',
   'https://unpkg.com/stockfish@17.1.0/src/stockfish-17.1-lite-single-03e3232.js',
 ];
@@ -1453,8 +1457,23 @@ function wireImportPage() {
 
   const exportDbBtn = $('exportDbBtn');
   if (exportDbBtn) {
-    exportDbBtn.addEventListener('click', () => {
-      window.open('/api/db/export', '_blank', 'noopener,noreferrer');
+    exportDbBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/db/export');
+        if (!res.ok) throw new Error(`export ${res.status}`);
+        const blob = await res.blob();
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = `blunderfix-local-${Date.now()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(href);
+      } catch (e) {
+        setImportStatus('DB export failed.', 'error');
+        log(`DB export failed: ${e.message}`);
+      }
     });
   }
   const importDbBtn = $('importDbBtn');
