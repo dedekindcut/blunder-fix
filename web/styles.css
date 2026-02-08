@@ -974,6 +974,11 @@ pre {
 }
 
 @media (max-width: 860px) {
+  html,
+  body {
+    overflow-x: clip;
+  }
+
   .topbar {
     flex-direction: column;
     align-items: flex-start;
@@ -1017,14 +1022,6 @@ pre {
     background: transparent;
     box-shadow: none;
     padding: 0.55rem 0 0.75rem;
-  }
-
-  .app-wrap[data-page='review'] .review-user-row,
-  .app-wrap[data-page='review'] .review-metrics,
-  .app-wrap[data-page='review'] #answerRow,
-  .app-wrap[data-page='review'] .review-side-column {
-    padding-left: 0.95rem;
-    padding-right: 0.95rem;
   }
 
   .review-user-row {
@@ -1079,17 +1076,29 @@ pre {
   }
 
   .review-metrics { order: 2; margin-top: 0.35rem; }
+  .app-wrap[data-page='review'] .review-side-column {
+    display: contents;
+  }
+  .app-wrap[data-page='review'] .review-side-actions {
+    display: contents;
+  }
+  #showAnswer {
+    order: 2;
+    margin: 0.35rem 0 0.55rem;
+    width: auto;
+  }
   .board-shell {
     order: 3;
     width: 100vw;
     max-width: 100vw;
     margin-left: calc(50% - 50vw);
     margin-right: calc(50% - 50vw);
+    overflow-x: clip;
   }
   #answerRow {
     order: 4;
     margin-top: 0.7rem;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.95rem;
     width: 100%;
     gap: 0.35rem;
   }
@@ -1099,7 +1108,12 @@ pre {
     font-size: 0.84rem;
     line-height: 1.1;
   }
-  .review-side-column { order: 5; }
+  .attempt-box { order: 5; margin-top: 0.2rem; margin-left: 0; margin-right: 0; }
+  #openLichessAnalysis { order: 6; margin-top: 0.3rem; margin-left: 0; margin-right: 0; width: auto; }
+  #viewSourceGame { order: 7; margin-top: 0.25rem; margin-left: 0; margin-right: 0; width: auto; }
+  #engineStatus { order: 8; margin-top: 0.35rem; margin-left: 0; margin-right: 0; }
+  #autoNextWrap { order: 9; margin-top: 0.2rem; margin-left: 0; margin-right: 0; }
+  #reviewMoveStatus { order: 10; margin-top: 0.2rem; margin-left: 0; margin-right: 0; }
 
   .stats-grid {
     grid-template-columns: 1fr;
