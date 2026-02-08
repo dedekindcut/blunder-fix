@@ -497,6 +497,14 @@ button:disabled {
   margin: 0.72rem 0 0.9rem;
 }
 
+.app-wrap[data-page='review'] .glass-panel:first-of-type {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
 .review-user-row {
   margin-bottom: 0.45rem;
 }
@@ -1005,6 +1013,18 @@ pre {
   .app-wrap[data-page='review'] .glass-panel:first-of-type {
     display: flex;
     flex-direction: column;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 0.55rem 0 0.75rem;
+  }
+
+  .app-wrap[data-page='review'] .review-user-row,
+  .app-wrap[data-page='review'] .review-metrics,
+  .app-wrap[data-page='review'] #answerRow,
+  .app-wrap[data-page='review'] .review-side-column {
+    padding-left: 0.95rem;
+    padding-right: 0.95rem;
   }
 
   .review-user-row {
@@ -1059,7 +1079,13 @@ pre {
   }
 
   .review-metrics { order: 2; margin-top: 0.35rem; }
-  .board-shell { order: 3; }
+  .board-shell {
+    order: 3;
+    width: 100vw;
+    max-width: 100vw;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
+  }
   #answerRow {
     order: 4;
     margin-top: 0.7rem;
