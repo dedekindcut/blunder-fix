@@ -583,6 +583,58 @@ function handleAnkiStats(username, url) {
   });
 }
 
+function handleSessionStats(url, username) {
+  const breakMinutes = parseIntQ(url, 'break_minutes', 60);
+  const breakMs = Math.max(1, Number(breakMinutes)) * 60 * 1000;
+  const u = lower(username);
+  const gameIds = new Set(getGameIdsByUser(u));
+  const positions = new Map(stateCache.positions.filter((p) => gameIds.has(p.game_id)).map((p) => [p.id, p]));
+  const cards = new Map(stateCache.cards.filter((c) => positions.has(c.position_id)).map((c) => [c.id, c]));
+  const reviews = stateCache.reviews
+    .filter((r) => cards.has(Number(r.card_id)))
+    .sort((a, b) => sqlTsToDate(String(b.reviewed_at || '')).getTime() - sqlTsToDate(String(a.reviewed_at || '')).getTime());
+
+  if (!reviews.length) {
+    return toJsonResponse({ reviewed: 0, attempts: 0, correct: 0, wrong: 0, streak: 0, bestStreak: 0 });
+  }
+
+  const session = [reviews[0]];
+  let prevTs = sqlTsToDate(String(reviews[0].reviewed_at || '')).getTime();
+  for (let i = 1; i < reviews.length; i += 1) {
+    const cur = reviews[i];
+    const ts = sqlTsToDate(String(cur.reviewed_at || '')).getTime();
+    if (!Number.isFinite(ts) || !Number.isFinite(prevTs)) break;
+    if ((prevTs - ts) > breakMs) break;
+    session.push(cur);
+    prevTs = ts;
+  }
+
+  const ordered = session.slice().reverse();
+  let correct = 0;
+  let wrong = 0;
+  let streak = 0;
+  let bestStreak = 0;
+  for (const r of ordered) {
+    const ok = Number(r.rating || 0) > 1;
+    if (ok) {
+      correct += 1;
+      streak += 1;
+      if (streak > bestStreak) bestStreak = streak;
+    } else {
+      wrong += 1;
+      streak = 0;
+    }
+  }
+  return toJsonResponse({
+    reviewed: ordered.length,
+    attempts: ordered.length,
+    correct,
+    wrong,
+    streak,
+    bestStreak,
+  });
+}
+
 function handleReviewNext(url, username) {
   const severity = parseSeverityFilter(url);
   ensureCardsForFilter(username, severity);
@@ -824,6 +876,9 @@ async function routeApi(url, options = {}) {
   if (path === '/api/users' && method === 'GET') return handleUsers(url);
   if (path.startsWith('/api/stats/anki/') && method === 'GET') {
     return handleAnkiStats(decodeURIComponent(path.split('/').pop() || ''), url);
+  }
+  if (path.startsWith('/api/stats/session/') && method === 'GET') {
+    return handleSessionStats(url, decodeURIComponent(path.split('/').pop() || ''));
   }
   if (path.startsWith('/api/stats/') && method === 'GET') {
     return handleStats(url, decodeURIComponent(path.split('/').pop() || ''));

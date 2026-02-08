@@ -9,7 +9,6 @@ const $ = (id) => document.getElementById(id);
 const STORAGE_USER_KEY = 'bf:selectedUser';
 const STORAGE_AUTO_GRADE_KEY = 'bf:autoGradeMode';
 const STORAGE_OPP_RESPONSE_KEY = 'bf:opponentResponseMode';
-const STORAGE_SESSION_PREFIX = 'bf:session:';
 const STORAGE_SEVERITY_FILTER_KEY = 'bf:severityFilter';
 
 const logEl = $('log');
@@ -508,11 +507,7 @@ function severityFilterQuery() {
   return q.toString();
 }
 
-function metricsStorageKey(username) {
-  return `${STORAGE_SESSION_PREFIX}${String(username || '').toLowerCase()}`;
-}
-
-function loadSessionMetricsForUser(username) {
+async function loadSessionMetricsForUser(username) {
   const zero = { reviewed: 0, attempts: 0, correct: 0, wrong: 0, streak: 0, bestStreak: 0 };
   if (!username) {
     Object.assign(sessionMetrics, zero);
@@ -520,8 +515,9 @@ function loadSessionMetricsForUser(username) {
     return;
   }
   try {
-    const raw = localStorage.getItem(metricsStorageKey(username));
-    const parsed = raw ? JSON.parse(raw) : null;
+    const res = await fetch(`/api/stats/session/${encodeURIComponent(username)}?break_minutes=60`);
+    if (!res.ok) throw new Error(`session stats ${res.status}`);
+    const parsed = await res.json();
     Object.assign(sessionMetrics, {
       reviewed: Number(parsed?.reviewed || 0),
       attempts: Number(parsed?.attempts || 0),
@@ -534,20 +530,6 @@ function loadSessionMetricsForUser(username) {
     Object.assign(sessionMetrics, zero);
   }
   updateSessionMetricsUI();
-}
-
-function saveSessionMetrics() {
-  const username = $('userSelectReview')?.value || selectedUser();
-  if (!username) return;
-  const payload = {
-    reviewed: Number(sessionMetrics.reviewed || 0),
-    attempts: Number(sessionMetrics.attempts || 0),
-    correct: Number(sessionMetrics.correct || 0),
-    wrong: Number(sessionMetrics.wrong || 0),
-    streak: Number(sessionMetrics.streak || 0),
-    bestStreak: Number(sessionMetrics.bestStreak || 0),
-  };
-  localStorage.setItem(metricsStorageKey(username), JSON.stringify(payload));
 }
 
 function isAutoGradeEnabled() {
@@ -869,7 +851,6 @@ function updateSessionMetricsUI() {
   if (metricAccuracyEl) metricAccuracyEl.textContent = percent(sessionMetrics.correct, sessionMetrics.attempts);
   if (metricStreakEl) metricStreakEl.textContent = String(sessionMetrics.streak);
   if (metricBestStreakEl) metricBestStreakEl.textContent = String(sessionMetrics.bestStreak);
-  saveSessionMetrics();
 }
 
 function formatDueDelta(targetTs) {
@@ -1215,16 +1196,7 @@ function showGradeOverlay(rating) {
 }
 
 function recordMoveAttempt(ok) {
-  sessionMetrics.attempts += 1;
-  if (ok) {
-    sessionMetrics.correct += 1;
-    sessionMetrics.streak += 1;
-    sessionMetrics.bestStreak = Math.max(sessionMetrics.bestStreak, sessionMetrics.streak);
-  } else {
-    sessionMetrics.wrong += 1;
-    sessionMetrics.streak = 0;
-  }
-  updateSessionMetricsUI();
+  void ok;
 }
 
 async function postJson(url, body) {
@@ -1442,16 +1414,19 @@ async function loadCard() {
 
 async function gradeCard(rating) {
   if (!currentCard) return;
+  const username = $('userSelectReview')?.value || selectedUser();
   clearWrongResetTimer();
   stopCardTimer();
   showGradeOverlay(rating);
   await sleep(220);
   clearBoardDecorations();
   const out = await postJson('/api/review/grade', { card_id: currentCard.card_id, rating });
-  sessionMetrics.reviewed += 1;
-  updateSessionMetricsUI();
   setReviewMoveStatus('Saved.', 'ok');
   await fetchUsers();
+  if (username) {
+    await refreshReviewQueueMetrics(username);
+    await loadSessionMetricsForUser(username);
+  }
   await loadCard();
 }
 
@@ -1511,9 +1486,9 @@ function wireCommon() {
   }
   const selReview = $('userSelectReview');
   if (selReview) {
-    selReview.addEventListener('change', () => {
+    selReview.addEventListener('change', async () => {
       setSelectedUser(selReview.value);
-      loadSessionMetricsForUser(selReview.value);
+      await loadSessionMetricsForUser(selReview.value);
       applyUserStatsToReviewMetrics(selReview.value);
       void refreshReviewQueueMetrics(selReview.value).catch((e) => log(`Queue refresh failed: ${e.message}`));
       void loadCard().catch((e) => log(`Auto-load user change failed: ${e.message}`));
@@ -2147,14 +2122,28 @@ function wireReviewPage() {
 
   window.addEventListener('keydown', async (e) => {
     if (!$('userSelectReview')) return; // review page only
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const tgt = e.target;
     const tag = tgt && tgt.tagName ? tgt.tagName.toLowerCase() : '';
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || (tgt && tgt.isContentEditable)) return;
     if (!currentCard) return;
 
     // Requested mapping: 1=Again, 2=Good, 3=Hard, 4=Easy
-    const map = { '1': 1, '2': 3, '3': 2, '4': 4 };
-    const rating = map[e.key];
+    const map = {
+      Digit1: 1,
+      Digit2: 3,
+      Digit3: 2,
+      Digit4: 4,
+      Numpad1: 1,
+      Numpad2: 3,
+      Numpad3: 2,
+      Numpad4: 4,
+      '1': 1,
+      '2': 3,
+      '3': 2,
+      '4': 4,
+    };
+    const rating = map[e.code] || map[e.key];
     if (!rating) return;
     e.preventDefault();
     try {
@@ -2205,14 +2194,14 @@ async function init() {
     if ($('userSelectAnalyze')) $('userSelectAnalyze').value = su;
     if ($('userSelectReview')) {
       $('userSelectReview').value = su;
-      loadSessionMetricsForUser(su);
+      await loadSessionMetricsForUser(su);
       applyUserStatsToReviewMetrics(su);
     }
     if ($('userSelectStats')) $('userSelectStats').value = su;
   }
 
   if ($('userSelectReview') && !su) {
-    loadSessionMetricsForUser($('userSelectReview').value || '');
+    await loadSessionMetricsForUser($('userSelectReview').value || '');
   }
 
   if ($('userSelectStats')) {
