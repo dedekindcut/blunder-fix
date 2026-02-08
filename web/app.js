@@ -8,6 +8,7 @@ let ChessCtor = null;
 const $ = (id) => document.getElementById(id);
 const STORAGE_USER_KEY = 'bf:selectedUser';
 const STORAGE_AUTO_GRADE_KEY = 'bf:autoGradeMode';
+const STORAGE_OPP_RESPONSE_KEY = 'bf:opponentResponseMode';
 const STORAGE_SESSION_PREFIX = 'bf:session:';
 const STORAGE_SEVERITY_FILTER_KEY = 'bf:severityFilter';
 
@@ -51,6 +52,9 @@ let attempts = [];
 let answerShown = false;
 let answerRevealed = false;
 let opponentReplyShapes = [];
+let awaitingOpponentResponse = false;
+let opponentResponseMoves = new Set();
+let opponentPhaseFen = null;
 let replyRequestSeq = 0;
 let cardStartedAt = null;
 let wrongAttemptsThisCard = 0;
@@ -550,6 +554,10 @@ function isAutoGradeEnabled() {
   return Boolean($('autoGradeMode')?.checked);
 }
 
+function isOpponentResponseEnabled() {
+  return Boolean($('opponentResponseMode')?.checked);
+}
+
 function clearAutoProceedTimer() {
   if (autoProceedTimer) {
     clearTimeout(autoProceedTimer);
@@ -746,13 +754,16 @@ function syncBoardArrows() {
   if (!cg) return;
   const shapes = [];
   if (answerRevealed) shapes.push(...alternativeShapes());
-  if (opponentReplyShapes.length) shapes.push(...opponentReplyShapes);
+  if ((!isOpponentResponseEnabled() || answerRevealed) && opponentReplyShapes.length) shapes.push(...opponentReplyShapes);
   cg.set({ drawable: { autoShapes: shapes } });
 }
 
 function clearBoardDecorations() {
   replyRequestSeq += 1;
   opponentReplyShapes = [];
+  awaitingOpponentResponse = false;
+  opponentResponseMoves = new Set();
+  opponentPhaseFen = null;
   hidePromotionPicker();
   clearAutoProceedTimer();
   if (!cg) return;
@@ -773,6 +784,7 @@ async function fetchOpponentReplyArrows(fen, cardId) {
     const lines = await evaluateFenLines(fen, { depth: 12, multipv: 4, cpWindow: 30 });
     if (seq !== replyRequestSeq) return false;
     if (!currentCard || currentCard.card_id !== cardId) return false;
+    opponentResponseMoves = new Set(lines.map((l) => String(l.first_move_uci || '')).filter((u) => u.length >= 4));
     opponentReplyShapes = lines
       .map((l, idx) => {
         const u = l.first_move_uci || '';
@@ -804,6 +816,9 @@ function resetAttemptBox() {
   if (attemptListEl) attemptListEl.innerHTML = '';
   answerShown = false;
   answerRevealed = false;
+  awaitingOpponentResponse = false;
+  opponentResponseMoves = new Set();
+  opponentPhaseFen = null;
   opponentReplyShapes = [];
   setShowAnswerButtonState();
   if (cg) {
@@ -1265,12 +1280,32 @@ function setupBoard(card) {
   syncBoardArrows();
 }
 
+function syncBoardFromPosition() {
+  if (!cg || !positionChess || !currentCard) return;
+  const turnColor = positionChess.turn() === 'w' ? 'white' : 'black';
+  const legalDests = new Map();
+  for (const m of positionChess.moves({ verbose: true })) {
+    if (!legalDests.has(m.from)) legalDests.set(m.from, []);
+    legalDests.get(m.from).push(m.to);
+  }
+  cg.set({
+    fen: positionChess.fen().split(' ').slice(0, 4).join(' '),
+    orientation: currentCard.side_to_move,
+    turnColor,
+    movable: { color: turnColor, dests: legalDests },
+  });
+  syncBoardArrows();
+}
+
 function resetToCardPosition() {
   if (!currentCard) return;
   clearWrongResetTimer();
   clearBoardDecorations();
   answerShown = false;
   answerRevealed = false;
+  awaitingOpponentResponse = false;
+  opponentResponseMoves = new Set();
+  opponentPhaseFen = null;
   setShowAnswerButtonState();
   setupBoard(currentCard);
   // Extra hard reset pass after board re-render to avoid stale arrows/last-move markers.
@@ -1298,40 +1333,66 @@ async function onMove(orig, dest) {
   attempts.push({ san: move.san || playedMoveUci, evalCp: line?.cp ?? null });
   const attemptIdx = attempts.length - 1;
   const fenAfter = positionChess.fen();
-  if (attempts[attemptIdx].evalCp === null || attempts[attemptIdx].evalCp === undefined) {
-    const cardId = currentCard.card_id;
-    void evaluateFenCp(fenAfter, { depth: 15, povSide: currentCard.side_to_move })
-      .then((cp) => {
-        if (!currentCard || currentCard.card_id !== cardId) return;
-        if (!attempts[attemptIdx]) return;
-        attempts[attemptIdx].evalCp = cp;
-        renderAttempts();
-      })
-      .catch((e) => log(`Eval failed: ${e.message}`));
-  }
+  const cardId = currentCard.card_id;
   renderAttempts();
-  const ok = acceptableLineSet().has(playedMoveUci);
+  const inOppPhase = awaitingOpponentResponse;
+  let ok = inOppPhase ? opponentResponseMoves.has(playedMoveUci) : acceptableLineSet().has(playedMoveUci);
+  if (!inOppPhase && !ok) {
+    try {
+      const quickCp = await evaluateFenCp(fenAfter, { depth: 15, povSide: currentCard.side_to_move });
+      if (!currentCard || currentCard.card_id !== cardId) return;
+      if (attempts[attemptIdx]) {
+        attempts[attemptIdx].evalCp = quickCp;
+        renderAttempts();
+      }
+      const bestCp = Number(currentCard.best_cp ?? currentCard.all_lines?.[0]?.cp ?? 0);
+      if (quickCp !== null && quickCp !== undefined) {
+        ok = (bestCp - Number(quickCp)) <= currentAcceptWindow();
+      }
+    } catch (e) {
+      log(`Eval failed: ${e.message}`);
+    }
+  }
   showBoardOverlay(ok);
   setReviewMoveStatus(ok ? 'Correct.' : 'Wrong.', ok ? 'ok' : 'error');
-  const cardId = currentCard.card_id;
   clearWrongResetTimer();
-  void fetchOpponentReplyArrows(fenAfter, cardId).finally(() => {
+  void (inOppPhase ? Promise.resolve(false) : fetchOpponentReplyArrows(fenAfter, cardId)).finally(() => {
     if (!currentCard || currentCard.card_id !== cardId) return;
     if (!ok) {
       setReviewMoveStatus('Wrong. Resetting...', 'error');
       wrongResetTimer = setTimeout(() => {
         if (!currentCard || currentCard.card_id !== cardId) return;
-        clearBoardDecorations();
-        setupBoard(currentCard);
-        setReviewMoveStatus('Try again.', 'idle');
+        if (awaitingOpponentResponse && opponentPhaseFen) {
+          positionChess = new ChessCtor(opponentPhaseFen);
+          syncBoardFromPosition();
+          setReviewMoveStatus('Try opponent response again.', 'idle');
+        } else {
+          clearBoardDecorations();
+          setupBoard(currentCard);
+          setReviewMoveStatus('Try again.', 'idle');
+        }
       }, 1000);
     } else {
-      setReviewMoveStatus('Correct.', 'ok');
-      scheduleAutoGrade(cardId);
+      if (!inOppPhase && isOpponentResponseEnabled()) {
+        if (!opponentResponseMoves.size) {
+          setReviewMoveStatus('Correct. No opponent response found.', 'ok');
+          scheduleAutoGrade(cardId);
+          return;
+        }
+        awaitingOpponentResponse = true;
+        opponentPhaseFen = fenAfter;
+        positionChess = new ChessCtor(fenAfter);
+        syncBoardFromPosition();
+        setReviewMoveStatus('Correct. Play opponent response...', 'ok');
+      } else {
+        awaitingOpponentResponse = false;
+        setReviewMoveStatus('Correct.', 'ok');
+        scheduleAutoGrade(cardId);
+      }
     }
   });
 
-  if (ok) {
+  if (ok && !inOppPhase) {
     answerShown = true;
     answerRevealed = false;
     setShowAnswerButtonState();
@@ -1567,10 +1628,22 @@ function wireCommon() {
 
   const autoGradeMode = $('autoGradeMode');
   if (autoGradeMode) {
-    autoGradeMode.checked = localStorage.getItem(STORAGE_AUTO_GRADE_KEY) === '1';
+    const stored = localStorage.getItem(STORAGE_AUTO_GRADE_KEY);
+    autoGradeMode.checked = stored === null ? true : stored === '1';
     autoGradeMode.addEventListener('change', () => {
       localStorage.setItem(STORAGE_AUTO_GRADE_KEY, autoGradeMode.checked ? '1' : '0');
       if (!autoGradeMode.checked) clearAutoProceedTimer();
+    });
+  }
+  const opponentResponseMode = $('opponentResponseMode');
+  if (opponentResponseMode) {
+    opponentResponseMode.checked = localStorage.getItem(STORAGE_OPP_RESPONSE_KEY) === '1';
+    opponentResponseMode.addEventListener('change', () => {
+      localStorage.setItem(STORAGE_OPP_RESPONSE_KEY, opponentResponseMode.checked ? '1' : '0');
+      if (opponentResponseMode.checked) {
+        opponentReplyShapes = [];
+        syncBoardArrows();
+      }
     });
   }
 
@@ -1647,7 +1720,7 @@ function wireImportPage() {
         const start = await postJson('/api/import/start', {
           source: 'chesscom',
           username,
-          max_games: Number($('chesscomMax')?.value || 200),
+          max_games: Number($('chesscomMax')?.value || 100),
         });
         const jobId = start.job_id;
         let finalOut = null;
