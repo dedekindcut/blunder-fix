@@ -13,6 +13,7 @@ const STORAGE_SHOW_POSITION_EVAL_KEY = 'bf:showPositionEval';
 const STORAGE_HIDE_PLAYED_MOVE_KEY = 'bf:hidePlayedMove';
 const STORAGE_EXCLUDE_LOST_KEY = 'bf:excludeLostPositions';
 const STORAGE_BOARD_THEME_KEY = 'bf:boardTheme';
+const STORAGE_PIECE_SET_KEY = 'bf:pieceSet';
 const STORAGE_SEVERITY_FILTER_KEY = 'bf:severityFilter';
 
 const logEl = $('log');
@@ -71,6 +72,9 @@ let sfInitPromise = null;
 let sfQueue = Promise.resolve();
 let sfInitState = 'idle';
 let sfInitError = null;
+let pieceSetApplySeq = 0;
+const PIECE_SETS = ['cburnett', 'alpha', 'merida', 'pirouetti', 'cardinal', 'maestro'];
+const pieceSetAvailableCache = new Map();
 const SF_WORKER_CANDIDATES = [
   'vendor/stockfish/stockfish.js',
   'https://cdn.jsdelivr.net/npm/stockfish@17.1.0/src/stockfish-17.1-lite-single-03e3232.js',
@@ -102,6 +106,37 @@ function setPlayedMoveMetric(card) {
   attemptPlayedMoveEl.classList.add(sev.cls);
 }
 
+function playedMoveArrowBrush(card) {
+  const j = String(card?.judgement || '').toLowerCase();
+  if (j === 'blunder') return 'red';
+  if (j === 'mistake') return 'yellow';
+  if (j === 'inaccuracy') return 'blue';
+  const cp = Number(card?.loss_cp || 0);
+  if (cp > 200) return 'red';
+  if (cp >= 100) return 'yellow';
+  return 'blue';
+}
+
+function playedMoveShape(card) {
+  let u = String(card?.played_uci || '');
+  if (u.length < 4 && ChessCtor && card?.fen && card?.played_san) {
+    try {
+      const b = new ChessCtor(card.fen);
+      const target = String(card.played_san).replace(/[+#?!]+/g, '');
+      const m = b
+        .moves({ verbose: true })
+        .find((x) => String(x.san || '').replace(/[+#?!]+/g, '') === target);
+      if (m) u = `${m.from}${m.to}${m.promotion || ''}`;
+    } catch {}
+  }
+  if (u.length < 4) return null;
+  return {
+    orig: u.slice(0, 2),
+    dest: u.slice(2, 4),
+    brush: playedMoveArrowBrush(card),
+  };
+}
+
 function isHidePlayedMoveEnabled() {
   return Boolean($('hidePlayedMove')?.checked);
 }
@@ -111,9 +146,10 @@ function syncPlayedMoveMetric() {
   if (attemptPlayedRowEl) attemptPlayedRowEl.hidden = concealed;
   if (concealed) {
     setPlayedMoveMetric(null);
-    return;
+  } else {
+    setPlayedMoveMetric(currentCard);
   }
-  setPlayedMoveMetric(currentCard);
+  syncBoardArrows();
 }
 
 function setAnswerEvalMetric(cp) {
@@ -582,6 +618,61 @@ function currentBoardTheme() {
   return ['brown', 'blue', 'green', 'slate'].includes(v) ? v : 'brown';
 }
 
+function storedPieceSet() {
+  const v = String(localStorage.getItem(STORAGE_PIECE_SET_KEY) || 'cburnett').toLowerCase();
+  return PIECE_SETS.includes(v) ? v : 'cburnett';
+}
+
+function currentPieceSet() {
+  const v = String($('reviewPieceSet')?.value || storedPieceSet()).toLowerCase();
+  return PIECE_SETS.includes(v) ? v : 'cburnett';
+}
+
+function pieceSvgUrl(setName, pieceCode) {
+  return `https://lichess1.org/assets/piece/${setName}/${pieceCode}.svg`;
+}
+
+function detectPieceSetAvailable(setName) {
+  if (pieceSetAvailableCache.has(setName)) return pieceSetAvailableCache.get(setName);
+  const p = new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      resolve(ok);
+    };
+    const img = new Image();
+    const timer = setTimeout(() => finish(false), 3500);
+    img.onload = () => {
+      clearTimeout(timer);
+      finish(true);
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      finish(false);
+    };
+    img.src = pieceSvgUrl(setName, 'wK');
+  });
+  pieceSetAvailableCache.set(setName, p);
+  return p;
+}
+
+async function applyPieceSet() {
+  const boardEl = $('board');
+  if (!boardEl) return;
+  const seq = ++pieceSetApplySeq;
+  let setName = currentPieceSet();
+  const ok = await detectPieceSetAvailable(setName);
+  if (seq !== pieceSetApplySeq) return;
+  if (!ok) {
+    setName = 'cburnett';
+    localStorage.setItem(STORAGE_PIECE_SET_KEY, setName);
+    const sel = $('reviewPieceSet');
+    if (sel) sel.value = setName;
+  }
+  boardEl.dataset.pieceSet = setName;
+}
+
 function applyBoardTheme() {
   const boardEl = $('board');
   if (!boardEl) return;
@@ -794,11 +885,38 @@ function alternativeShapes() {
   return out;
 }
 
+function answerLineShapes() {
+  const lines = acceptableLines();
+  if (!lines.length) return [];
+  const seen = new Set();
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const u = String(lines[i]?.first_move_uci || '');
+    if (u.length < 4 || seen.has(u)) continue;
+    seen.add(u);
+    out.push({
+      orig: u.slice(0, 2),
+      dest: u.slice(2, 4),
+      brush: i === 0 ? 'blue' : 'green',
+    });
+  }
+  return out;
+}
+
+function computeBoardShapes() {
+  const shapes = [];
+  if (!isHidePlayedMoveEnabled() && currentCard) {
+    const shape = playedMoveShape(currentCard);
+    if (shape) shapes.push(shape);
+  }
+  if (answerRevealed) shapes.push(...answerLineShapes());
+  if ((!isOpponentResponseEnabled() || answerRevealed) && opponentReplyShapes.length) shapes.push(...opponentReplyShapes);
+  return shapes;
+}
+
 function syncBoardArrows() {
   if (!cg) return;
-  const shapes = [];
-  if (answerRevealed) shapes.push(...alternativeShapes());
-  if ((!isOpponentResponseEnabled() || answerRevealed) && opponentReplyShapes.length) shapes.push(...opponentReplyShapes);
+  const shapes = computeBoardShapes();
   cg.set({ drawable: { autoShapes: shapes } });
 }
 
@@ -1319,6 +1437,7 @@ async function ensureBoardDeps() {
 function setupBoard(card) {
   const boardEl = $('board');
   if (!boardEl) return;
+  void applyPieceSet();
   applyBoardTheme();
   if (!cg) {
     cg = ChessgroundCtor(boardEl, {
@@ -1347,10 +1466,9 @@ function setupBoard(card) {
     orientation: card.side_to_move,
     turnColor: card.side_to_move,
     lastMove: null,
-    drawable: { autoShapes: [] },
+    drawable: { autoShapes: computeBoardShapes() },
     movable: { color: card.side_to_move, dests: legalDests },
   });
-  syncBoardArrows();
 }
 
 function syncBoardFromPosition() {
@@ -1793,6 +1911,15 @@ function wireCommon() {
       const theme = currentBoardTheme();
       localStorage.setItem(STORAGE_BOARD_THEME_KEY, theme);
       applyBoardTheme();
+    });
+  }
+  const reviewPieceSet = $('reviewPieceSet');
+  if (reviewPieceSet) {
+    reviewPieceSet.value = storedPieceSet();
+    reviewPieceSet.addEventListener('change', () => {
+      const setName = currentPieceSet();
+      localStorage.setItem(STORAGE_PIECE_SET_KEY, setName);
+      void applyPieceSet();
     });
   }
 

@@ -838,6 +838,114 @@ button:disabled {
   background-position: 0 0 !important;
 }
 
+#board piece {
+  background-size: contain !important;
+  background-repeat: no-repeat !important;
+}
+
+#board[data-piece-set='cburnett'] {
+  --wK: url('https://lichess1.org/assets/piece/cburnett/wK.svg');
+  --wQ: url('https://lichess1.org/assets/piece/cburnett/wQ.svg');
+  --wR: url('https://lichess1.org/assets/piece/cburnett/wR.svg');
+  --wB: url('https://lichess1.org/assets/piece/cburnett/wB.svg');
+  --wN: url('https://lichess1.org/assets/piece/cburnett/wN.svg');
+  --wP: url('https://lichess1.org/assets/piece/cburnett/wP.svg');
+  --bK: url('https://lichess1.org/assets/piece/cburnett/bK.svg');
+  --bQ: url('https://lichess1.org/assets/piece/cburnett/bQ.svg');
+  --bR: url('https://lichess1.org/assets/piece/cburnett/bR.svg');
+  --bB: url('https://lichess1.org/assets/piece/cburnett/bB.svg');
+  --bN: url('https://lichess1.org/assets/piece/cburnett/bN.svg');
+  --bP: url('https://lichess1.org/assets/piece/cburnett/bP.svg');
+}
+
+#board[data-piece-set='alpha'] {
+  --wK: url('https://lichess1.org/assets/piece/alpha/wK.svg');
+  --wQ: url('https://lichess1.org/assets/piece/alpha/wQ.svg');
+  --wR: url('https://lichess1.org/assets/piece/alpha/wR.svg');
+  --wB: url('https://lichess1.org/assets/piece/alpha/wB.svg');
+  --wN: url('https://lichess1.org/assets/piece/alpha/wN.svg');
+  --wP: url('https://lichess1.org/assets/piece/alpha/wP.svg');
+  --bK: url('https://lichess1.org/assets/piece/alpha/bK.svg');
+  --bQ: url('https://lichess1.org/assets/piece/alpha/bQ.svg');
+  --bR: url('https://lichess1.org/assets/piece/alpha/bR.svg');
+  --bB: url('https://lichess1.org/assets/piece/alpha/bB.svg');
+  --bN: url('https://lichess1.org/assets/piece/alpha/bN.svg');
+  --bP: url('https://lichess1.org/assets/piece/alpha/bP.svg');
+}
+
+#board[data-piece-set='merida'] {
+  --wK: url('https://lichess1.org/assets/piece/merida/wK.svg');
+  --wQ: url('https://lichess1.org/assets/piece/merida/wQ.svg');
+  --wR: url('https://lichess1.org/assets/piece/merida/wR.svg');
+  --wB: url('https://lichess1.org/assets/piece/merida/wB.svg');
+  --wN: url('https://lichess1.org/assets/piece/merida/wN.svg');
+  --wP: url('https://lichess1.org/assets/piece/merida/wP.svg');
+  --bK: url('https://lichess1.org/assets/piece/merida/bK.svg');
+  --bQ: url('https://lichess1.org/assets/piece/merida/bQ.svg');
+  --bR: url('https://lichess1.org/assets/piece/merida/bR.svg');
+  --bB: url('https://lichess1.org/assets/piece/merida/bB.svg');
+  --bN: url('https://lichess1.org/assets/piece/merida/bN.svg');
+  --bP: url('https://lichess1.org/assets/piece/merida/bP.svg');
+}
+
+#board[data-piece-set='pirouetti'] {
+  --wK: url('https://lichess1.org/assets/piece/pirouetti/wK.svg');
+  --wQ: url('https://lichess1.org/assets/piece/pirouetti/wQ.svg');
+  --wR: url('https://lichess1.org/assets/piece/pirouetti/wR.svg');
+  --wB: url('https://lichess1.org/assets/piece/pirouetti/wB.svg');
+  --wN: url('https://lichess1.org/assets/piece/pirouetti/wN.svg');
+  --wP: url('https://lichess1.org/assets/piece/pirouetti/wP.svg');
+  --bK: url('https://lichess1.org/assets/piece/pirouetti/bK.svg');
+  --bQ: url('https://lichess1.org/assets/piece/pirouetti/bQ.svg');
+  --bR: url('https://lichess1.org/assets/piece/pirouetti/bR.svg');
+  --bB: url('https://lichess1.org/assets/piece/pirouetti/bB.svg');
+  --bN: url('https://lichess1.org/assets/piece/pirouetti/bN.svg');
+  --bP: url('https://lichess1.org/assets/piece/pirouetti/bP.svg');
+}
+
+#board[data-piece-set='cardinal'] {
+  --wK: url('https://lichess1.org/assets/piece/cardinal/wK.svg');
+  --wQ: url('https://lichess1.org/assets/piece/cardinal/wQ.svg');
+  --wR: url('https://lichess1.org/assets/piece/cardinal/wR.svg');
+  --wB: url('https://lichess1.org/assets/piece/cardinal/wB.svg');
+  --wN: url('https://lichess1.org/assets/piece/cardinal/wN.svg');
+  --wP: url('https://lichess1.org/assets/piece/cardinal/wP.svg');
+  --bK: url('https://lichess1.org/assets/piece/cardinal/bK.svg');
+  --bQ: url('https://lichess1.org/assets/piece/cardinal/bQ.svg');
+  --bR: url('https://lichess1.org/assets/piece/cardinal/bR.svg');
+  --bB: url('https://lichess1.org/assets/piece/cardinal/bB.svg');
+  --bN: url('https://lichess1.org/assets/piece/cardinal/bN.svg');
+  --bP: url('https://lichess1.org/assets/piece/cardinal/bP.svg');
+}
+
+#board[data-piece-set='maestro'] {
+  --wK: url('https://lichess1.org/assets/piece/maestro/wK.svg');
+  --wQ: url('https://lichess1.org/assets/piece/maestro/wQ.svg');
+  --wR: url('https://lichess1.org/assets/piece/maestro/wR.svg');
+  --wB: url('https://lichess1.org/assets/piece/maestro/wB.svg');
+  --wN: url('https://lichess1.org/assets/piece/maestro/wN.svg');
+  --wP: url('https://lichess1.org/assets/piece/maestro/wP.svg');
+  --bK: url('https://lichess1.org/assets/piece/maestro/bK.svg');
+  --bQ: url('https://lichess1.org/assets/piece/maestro/bQ.svg');
+  --bR: url('https://lichess1.org/assets/piece/maestro/bR.svg');
+  --bB: url('https://lichess1.org/assets/piece/maestro/bB.svg');
+  --bN: url('https://lichess1.org/assets/piece/maestro/bN.svg');
+  --bP: url('https://lichess1.org/assets/piece/maestro/bP.svg');
+}
+
+#board piece.white.king { background-image: var(--wK); }
+#board piece.white.queen { background-image: var(--wQ); }
+#board piece.white.rook { background-image: var(--wR); }
+#board piece.white.bishop { background-image: var(--wB); }
+#board piece.white.knight { background-image: var(--wN); }
+#board piece.white.pawn { background-image: var(--wP); }
+#board piece.black.king { background-image: var(--bK); }
+#board piece.black.queen { background-image: var(--bQ); }
+#board piece.black.rook { background-image: var(--bR); }
+#board piece.black.bishop { background-image: var(--bB); }
+#board piece.black.knight { background-image: var(--bN); }
+#board piece.black.pawn { background-image: var(--bP); }
+
 .board-overlay {
   position: absolute;
   inset: 0;
