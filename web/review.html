@@ -29,7 +29,7 @@
       </header>
 
       <section class="glass-panel">
-        <div class="row">
+        <div class="row review-user-row">
           <label>Username
             <select id="userSelectReview"></select>
           </label>
@@ -71,6 +71,10 @@
               </div>
               <div class="attempt-timer" id="attemptTimer">00:00</div>
               <div class="attempt-head">
+                <span>You Played</span>
+                <strong id="attemptPlayedMove">-</strong>
+              </div>
+              <div class="attempt-head">
                 <span>Answer Eval</span>
                 <strong id="answerEvalMetric">-</strong>
               </div>
@@ -109,24 +113,22 @@
             <button id="reviewSettingsClose" class="icon-btn" aria-label="Close settings" title="Close">&#10005;</button>
           </div>
           <div class="settings-grid">
-            <label class="checkbox-label">Auto-Grade
-              <input id="autoGradeMode" type="checkbox" />
+            <label class="switch-label">Auto-Grade
+              <span class="switch">
+                <input id="autoGradeMode" type="checkbox" />
+                <span class="switch-track"></span>
+              </span>
             </label>
-            <label>Blunder Threshold (cp)
-              <input id="reviewThreshold" type="range" value="200" min="20" max="1000" step="10" />
-              <span class="slider-value" id="reviewThresholdValue">200</span>
-            </label>
-            <label>Min Eval (cp)
-              <input id="reviewObjectiveFloor" type="range" value="-200" min="-1000" max="200" step="10" />
-              <span class="slider-value" id="reviewObjectiveFloorValue">-200</span>
+            <label class="severity-filter">Include
+              <span class="severity-options">
+                <label class="severity-chip severity-chip--inaccuracy"><input id="reviewShowInaccuracy" type="checkbox" /><span>Inaccuracy</span></label>
+                <label class="severity-chip severity-chip--mistake"><input id="reviewShowMistake" type="checkbox" /><span>Mistake</span></label>
+                <label class="severity-chip severity-chip--blunder"><input id="reviewShowBlunder" type="checkbox" checked /><span>Blunder</span></label>
+              </span>
             </label>
             <label>Accept Move Window (cp)
-              <input id="reviewAcceptWindow" type="range" value="50" min="0" max="300" step="5" />
-              <span class="slider-value" id="reviewAcceptWindowValue">50</span>
-            </label>
-            <label>Winning Prune (cp)
-              <input id="reviewWinningPrune" type="range" value="300" min="0" max="1000" step="10" />
-              <span class="slider-value" id="reviewWinningPruneValue">300</span>
+              <input id="reviewAcceptWindow" type="range" value="30" min="0" max="300" step="5" />
+              <span class="slider-value" id="reviewAcceptWindowValue">30</span>
             </label>
           </div>
         </section>
@@ -135,11 +137,6 @@
       <section class="glass-panel">
         <h2>Imported Profiles</h2>
         <div id="userCards" class="profiles-grid"></div>
-      </section>
-
-      <section class="glass-panel">
-        <h2>Logs</h2>
-        <pre id="log"></pre>
       </section>
     </main>
     <script type="module" src="./app.js"></script>

@@ -39,6 +39,23 @@ function parseIntQ(url, key, fallback) {
   return Number.isFinite(v) ? v : fallback;
 }
 
+function parseBoolQ(url, key, fallback) {
+  const u = new URL(url, window.location.origin);
+  if (!u.searchParams.has(key)) return fallback;
+  const v = String(u.searchParams.get(key) || '').toLowerCase();
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+  return fallback;
+}
+
+function parseSeverityFilter(url) {
+  return {
+    inaccuracy: parseBoolQ(url, 'show_inaccuracy', false),
+    mistake: parseBoolQ(url, 'show_mistake', false),
+    blunder: parseBoolQ(url, 'show_blunder', true),
+  };
+}
+
 function lower(s) {
   return String(s || '').trim().toLowerCase();
 }
@@ -84,6 +101,14 @@ async function loadState() {
   const v = await idbGet(STATE_KEY);
   stateCache = v && typeof v === 'object' ? v : structuredClone(DEFAULT_STATE);
   if (!stateCache.nextIds) stateCache.nextIds = structuredClone(DEFAULT_STATE.nextIds);
+  if (Array.isArray(stateCache.positions)) {
+    for (const p of stateCache.positions) {
+      if (!p || typeof p !== 'object') continue;
+      if (!p.judgement && Number(p.is_blunder || 0) > 0) p.judgement = 'blunder';
+      if (p.winning_chance_delta === undefined || p.winning_chance_delta === null) p.winning_chance_delta = 0;
+      if (Object.prototype.hasOwnProperty.call(p, 'is_blunder')) delete p.is_blunder;
+    }
+  }
   return stateCache;
 }
 
@@ -226,7 +251,21 @@ function getPositionsByGameIds(gameIds) {
   return stateCache.positions.filter((p) => s.has(p.game_id));
 }
 
-function ensureCardsForThreshold(username, minLossCp, minBestCp = -200, winningPruneCp = 300) {
+function positionJudgement(p) {
+  const j = String(p?.judgement || '').toLowerCase();
+  if (j === 'blunder' || j === 'mistake' || j === 'inaccuracy') return j;
+  return '';
+}
+
+function matchesPositionFilter(p, severity) {
+  const j = positionJudgement(p);
+  if (!j) return false;
+  const okClass = (j === 'blunder' && severity.blunder) || (j === 'mistake' && severity.mistake) || (j === 'inaccuracy' && severity.inaccuracy);
+  if (!okClass) return false;
+  return true;
+}
+
+function ensureCardsForFilter(username, severity) {
   const u = lower(username);
   const gameIds = getGameIdsByUser(u);
   const pset = getPositionsByGameIds(gameIds);
@@ -234,9 +273,7 @@ function ensureCardsForThreshold(username, minLossCp, minBestCp = -200, winningP
   let created = 0;
   for (const p of pset) {
     if (cardByPosition.has(p.id)) continue;
-    if (Number(p.loss_cp) < Number(minLossCp)) continue;
-    if (Number(p.best_cp) < Number(minBestCp)) continue;
-    if (Number(p.best_cp) >= Number(winningPruneCp) && Number(p.played_cp) >= Number(winningPruneCp)) continue;
+    if (!matchesPositionFilter(p, severity)) continue;
     stateCache.cards.push({
       id: nextId('card'),
       position_id: p.id,
@@ -254,7 +291,7 @@ function ensureCardsForThreshold(username, minLossCp, minBestCp = -200, winningP
   return created;
 }
 
-function filterDueCardsForUser(username, minLossCp, minBestCp, winningPruneCp) {
+function filterDueCardsForUser(username, severity) {
   const u = lower(username);
   const gameIds = new Set(getGameIdsByUser(u));
   const positions = new Map(stateCache.positions.filter((p) => gameIds.has(p.game_id)).map((p) => [p.id, p]));
@@ -263,9 +300,7 @@ function filterDueCardsForUser(username, minLossCp, minBestCp, winningPruneCp) {
     const p = positions.get(c.position_id);
     if (!p) return false;
     if (sqlTsToDate(c.due_at).getTime() > now) return false;
-    if (Number(p.loss_cp) < Number(minLossCp)) return false;
-    if (Number(p.best_cp) < Number(minBestCp)) return false;
-    if (Number(p.best_cp) >= Number(winningPruneCp) && Number(p.played_cp) >= Number(winningPruneCp)) return false;
+    if (!matchesPositionFilter(p, severity)) return false;
     return true;
   }).map((c) => ({ card: c, position: positions.get(c.position_id) }));
 }
@@ -273,11 +308,43 @@ function filterDueCardsForUser(username, minLossCp, minBestCp, winningPruneCp) {
 async function importLichess(username, maxGames, job) {
   const u = lower(username);
   const url = `https://lichess.org/api/games/user/${encodeURIComponent(username)}?max=${encodeURIComponent(String(maxGames))}&pgnInJson=true`;
+  job.phase = 'fetching';
+  job.message = 'Fetching games from Lichess... 0';
   const res = await fetch(url, { headers: { Accept: 'application/x-ndjson' } });
   if (!res.ok) throw new Error(`lichess ${res.status}`);
-  const txt = await res.text();
-  const lines = txt.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = [];
+  if (res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const chunks = buf.split('\n');
+      buf = chunks.pop() || '';
+      for (const raw of chunks) {
+        const line = raw.trim();
+        if (!line) continue;
+        lines.push(line);
+      }
+      job.message = `Fetching games from Lichess... ${lines.length}`;
+    }
+    buf += decoder.decode();
+    const tail = buf.trim();
+    if (tail) lines.push(tail);
+  } else {
+    const txt = await res.text();
+    for (const raw of txt.split('\n')) {
+      const line = raw.trim();
+      if (!line) continue;
+      lines.push(line);
+      job.message = `Fetching games from Lichess... ${lines.length}`;
+    }
+  }
   job.total = lines.length;
+  job.phase = 'importing';
+  job.message = `Importing... 0/${job.total} games`;
   for (let i = 0; i < lines.length; i += 1) {
     const g = JSON.parse(lines[i]);
     const sourceGameId = String(g.id || g.gameId || `lichess-${i}`);
@@ -301,20 +368,28 @@ async function importLichess(username, maxGames, job) {
       job.skipped += 1;
     }
     job.done = i + 1;
+    job.message = `Importing... ${job.done}/${job.total} games`;
   }
 }
 
 async function importChessCom(username, maxGames, job) {
   const u = lower(username);
+  job.phase = 'fetching_archives';
+  job.message = 'Loading Chess.com archive list...';
   const archivesRes = await fetch(`https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/archives`);
   if (!archivesRes.ok) throw new Error(`chesscom archives ${archivesRes.status}`);
   const archivesJson = await archivesRes.json();
   const archives = Array.isArray(archivesJson.archives) ? archivesJson.archives.slice().reverse() : [];
+  job.archives_total = archives.length;
+  job.archives_done = 0;
 
   const games = [];
   for (const a of archives) {
     if (games.length >= maxGames) break;
+    job.phase = 'fetching_games';
+    job.message = `Fetching games... ${games.length}/${maxGames} collected`;
     const res = await fetch(a);
+    job.archives_done += 1;
     if (!res.ok) continue;
     const j = await res.json();
     const arr = Array.isArray(j.games) ? j.games : [];
@@ -322,9 +397,12 @@ async function importChessCom(username, maxGames, job) {
       if (games.length >= maxGames) break;
       games.push(g);
     }
+    job.message = `Fetching games... ${games.length}/${maxGames} collected`;
   }
 
   job.total = games.length;
+  job.phase = 'importing';
+  job.message = `Importing... 0/${job.total} games`;
   for (let i = 0; i < games.length; i += 1) {
     const g = games[i];
     const sourceGameId = String(g.url || g.uuid || `chesscom-${i}`);
@@ -348,6 +426,7 @@ async function importChessCom(username, maxGames, job) {
       job.skipped += 1;
     }
     job.done = i + 1;
+    job.message = `Importing... ${job.done}/${job.total} games`;
   }
 }
 
@@ -357,6 +436,8 @@ async function handleImportStart(body) {
     state: 'running',
     source: body.source,
     username: lower(body.username),
+    phase: 'queued',
+    message: 'Queued...',
     done: 0,
     total: 0,
     imported: 0,
@@ -387,7 +468,29 @@ async function handleImportProgress(jobId) {
   return toJsonResponse(job);
 }
 
-function computeUserStats(username, minLossCp, minBestCp, winningPruneCp) {
+async function handleImportClearAll() {
+  const gamesDeleted = stateCache.games.length;
+  const positionsDeleted = stateCache.positions.length;
+  const cardsDeleted = stateCache.cards.length;
+  const reviewsDeleted = stateCache.reviews.length;
+  stateCache.games = [];
+  stateCache.positions = [];
+  stateCache.candidate_lines = [];
+  stateCache.practical_responses = [];
+  stateCache.cards = [];
+  stateCache.reviews = [];
+  stateCache.nextIds = structuredClone(DEFAULT_STATE.nextIds);
+  importJobs.clear();
+  await saveState();
+  return toJsonResponse({
+    games_deleted: gamesDeleted,
+    positions_deleted: positionsDeleted,
+    cards_deleted: cardsDeleted,
+    reviews_deleted: reviewsDeleted,
+  });
+}
+
+function computeUserStats(username, severity) {
   const u = lower(username);
   const gameIds = getGameIdsByUser(u);
   const positions = getPositionsByGameIds(gameIds);
@@ -395,11 +498,7 @@ function computeUserStats(username, minLossCp, minBestCp, winningPruneCp) {
   const now = sqlTsToDate(nowIsoUtc()).getTime();
   const cards = stateCache.cards.filter((c) => posById.has(c.position_id));
 
-  const matches = (p) =>
-    Number(p.loss_cp) >= Number(minLossCp) &&
-    Number(p.best_cp) >= Number(minBestCp) &&
-    !(Number(p.best_cp) >= Number(winningPruneCp) && Number(p.played_cp) >= Number(winningPruneCp));
-
+  const matches = (p) => matchesPositionFilter(p, severity);
   const blunders = positions.filter(matches).length;
   const dueCards = cards.filter((c) => {
     const p = posById.get(c.position_id);
@@ -423,18 +522,14 @@ function computeUserStats(username, minLossCp, minBestCp, winningPruneCp) {
 }
 
 function handleUsers(url) {
-  const t = parseIntQ(url, 'blunder_threshold', 200);
-  const floor = parseIntQ(url, 'objective_floor_cp', -200);
-  const win = parseIntQ(url, 'winning_prune_cp', 300);
+  const severity = parseSeverityFilter(url);
   const users = [...new Set(stateCache.games.map((g) => lower(g.username)))].sort();
-  return toJsonResponse({ users: users.map((u) => computeUserStats(u, t, floor, win)) });
+  return toJsonResponse({ users: users.map((u) => computeUserStats(u, severity)) });
 }
 
 function handleStats(url, username) {
-  const t = parseIntQ(url, 'blunder_threshold', 200);
-  const floor = parseIntQ(url, 'objective_floor_cp', -200);
-  const win = parseIntQ(url, 'winning_prune_cp', 300);
-  return toJsonResponse(computeUserStats(username, t, floor, win));
+  const severity = parseSeverityFilter(url);
+  return toJsonResponse(computeUserStats(username, severity));
 }
 
 function handleAnkiStats(username, url) {
@@ -484,11 +579,9 @@ function handleAnkiStats(username, url) {
 }
 
 function handleReviewNext(url, username) {
-  const t = parseIntQ(url, 'blunder_threshold', 200);
-  const floor = parseIntQ(url, 'objective_floor_cp', -200);
-  const win = parseIntQ(url, 'winning_prune_cp', 300);
-  ensureCardsForThreshold(username, t, floor, win);
-  const rows = filterDueCardsForUser(username, t, floor, win);
+  const severity = parseSeverityFilter(url);
+  ensureCardsForFilter(username, severity);
+  const rows = filterDueCardsForUser(username, severity);
   rows.sort((a, b) => {
     const ar = Number(a.card.reps || 0) > 0 ? 0 : 1;
     const br = Number(b.card.reps || 0) > 0 ? 0 : 1;
@@ -521,6 +614,8 @@ function handleReviewNext(url, username) {
       source_game_id: game?.source_game_id || '',
       best_cp: first.position.best_cp,
       played_cp: first.position.played_cp,
+      judgement: first.position.judgement || '',
+      winning_chance_delta: Number(first.position.winning_chance_delta || 0),
       acceptable_lines: lines.filter((l) => l.is_acceptable),
       all_lines: lines,
       practical_response: practical
@@ -621,10 +716,11 @@ async function handleAnalyzeStoreGame(body) {
       best_cp: Number(p.best_cp),
       played_cp: Number(p.played_cp),
       loss_cp: Number(p.loss_cp),
-      is_blunder: p.is_blunder ? 1 : 0,
+      judgement: String(p.judgement || ''),
+      winning_chance_delta: Number(p.winning_chance_delta || 0),
       created_at: nowIsoUtc(),
     });
-    if (p.is_blunder) blunders += 1;
+    if (String(p.judgement || '').toLowerCase() === 'blunder') blunders += 1;
 
     for (const c of (p.candidate_lines || [])) {
       stateCache.candidate_lines.push({
@@ -712,6 +808,7 @@ async function routeApi(url, options = {}) {
 
   if (path === '/api/import/start' && method === 'POST') return handleImportStart(body || {});
   if (path.startsWith('/api/import/progress/') && method === 'GET') return handleImportProgress(path.split('/').pop() || '');
+  if (path === '/api/import/clear-all' && method === 'POST') return handleImportClearAll();
 
   if (path.startsWith('/api/analyze/games/') && method === 'GET') {
     return handleAnalyzeGames(decodeURIComponent(path.split('/').pop() || ''), url);

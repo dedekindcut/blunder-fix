@@ -51,15 +51,23 @@
       <section class="glass-panel">
         <h2>Imported Profiles</h2>
         <div class="row">
-          <button id="refreshUsers">Refresh Profiles</button>
+          <button id="clearAllImportsBtn" class="danger-btn">Clear All Imports</button>
         </div>
         <div id="userCards" class="profiles-grid"></div>
       </section>
 
-      <section class="glass-panel">
-        <h2>Logs</h2>
-        <pre id="log"></pre>
-      </section>
+      <div id="importClearOverlay" class="settings-overlay" hidden>
+        <div id="importClearBackdrop" class="settings-backdrop"></div>
+        <section class="confirm-panel" role="dialog" aria-modal="true" aria-labelledby="importClearTitle">
+          <h2 id="importClearTitle">Clear All Imports?</h2>
+          <p>This removes all imported games, analysis positions, cards, and review history.</p>
+          <div class="confirm-actions">
+            <button id="importClearCancel">Cancel</button>
+            <button id="importClearConfirm" class="danger-btn">Clear</button>
+          </div>
+        </section>
+      </div>
+
     </main>
     <script type="module" src="./app.js"></script>
   </body>

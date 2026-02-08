@@ -9,6 +9,7 @@ const $ = (id) => document.getElementById(id);
 const STORAGE_USER_KEY = 'bf:selectedUser';
 const STORAGE_AUTO_GRADE_KEY = 'bf:autoGradeMode';
 const STORAGE_SESSION_PREFIX = 'bf:session:';
+const STORAGE_SEVERITY_FILTER_KEY = 'bf:severityFilter';
 
 const logEl = $('log');
 const infoEl = $('cardInfo');
@@ -29,6 +30,7 @@ const metricQueueWrongEl = $('metricQueueWrong');
 const metricQueueNewEl = $('metricQueueNew');
 const attemptCardIdEl = $('attemptCardId');
 const attemptTimerEl = $('attemptTimer');
+const attemptPlayedMoveEl = $('attemptPlayedMove');
 const attemptListEl = $('attemptList');
 const answerEvalMetricEl = $('answerEvalMetric');
 const promotionPickerEl = $('promotionPicker');
@@ -69,6 +71,28 @@ const SF_WORKER_CANDIDATES = [
 
 const sessionMetrics = { reviewed: 0, attempts: 0, correct: 0, wrong: 0, streak: 0, bestStreak: 0 };
 const gradeBaseLabels = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
+const DEFAULT_SEVERITY_FILTER = { inaccuracy: false, mistake: false, blunder: true };
+
+function playedMoveSeverity(lossCp) {
+  const cp = Number(lossCp || 0);
+  if (cp > 200) return { suffix: '??', cls: 'played-severe' };
+  if (cp >= 100) return { suffix: '?', cls: 'played-mistake' };
+  return { suffix: '?!', cls: 'played-inaccuracy' };
+}
+
+function setPlayedMoveMetric(card) {
+  if (!attemptPlayedMoveEl) return;
+  const san = card?.played_san || '-';
+  if (!card || !san || san === '-') {
+    attemptPlayedMoveEl.textContent = '-';
+    attemptPlayedMoveEl.classList.remove('played-severe', 'played-mistake', 'played-inaccuracy');
+    return;
+  }
+  const sev = playedMoveSeverity(card.loss_cp);
+  attemptPlayedMoveEl.textContent = `${san}${sev.suffix}`;
+  attemptPlayedMoveEl.classList.remove('played-severe', 'played-mistake', 'played-inaccuracy');
+  attemptPlayedMoveEl.classList.add(sev.cls);
+}
 
 function log(msg) {
   if (!logEl) return;
@@ -91,6 +115,26 @@ function scoreForPov(cpFromTurn, turnSide, povSide) {
   if (cpFromTurn === null || cpFromTurn === undefined) return null;
   if (!povSide || povSide === turnSide) return cpFromTurn;
   return -cpFromTurn;
+}
+
+function winningChancesFromCp(cp) {
+  const MULTIPLIER = -0.00368208;
+  const x = Number(cp || 0);
+  const out = (2 / (1 + Math.exp(MULTIPLIER * x))) - 1;
+  if (out < -1) return -1;
+  if (out > 1) return 1;
+  return out;
+}
+
+function classifyByWinningChanceDelta(bestCp, playedCp) {
+  const b = Number(bestCp);
+  const p = Number(playedCp);
+  if (!Number.isFinite(b) || !Number.isFinite(p)) return { judgement: null, delta: 0 };
+  const delta = winningChancesFromCp(b) - winningChancesFromCp(p);
+  if (delta >= 0.3) return { judgement: 'blunder', delta };
+  if (delta >= 0.2) return { judgement: 'mistake', delta };
+  if (delta >= 0.1) return { judgement: 'inaccuracy', delta };
+  return { judgement: null, delta };
 }
 
 function parseInfoLine(line) {
@@ -345,6 +389,86 @@ function setSelectedUser(username) {
   }
 }
 
+function parseStoredSeverityFilter(raw) {
+  let parsed = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_SEVERITY_FILTER };
+  return {
+    inaccuracy: Boolean(parsed.inaccuracy),
+    mistake: Boolean(parsed.mistake),
+    blunder: parsed.blunder === undefined ? true : Boolean(parsed.blunder),
+  };
+}
+
+function getStoredSeverityFilter() {
+  return parseStoredSeverityFilter(localStorage.getItem(STORAGE_SEVERITY_FILTER_KEY));
+}
+
+function saveSeverityFilter(filter) {
+  localStorage.setItem(
+    STORAGE_SEVERITY_FILTER_KEY,
+    JSON.stringify({
+      inaccuracy: Boolean(filter?.inaccuracy),
+      mistake: Boolean(filter?.mistake),
+      blunder: Boolean(filter?.blunder),
+    })
+  );
+}
+
+function severityFilterFromDom() {
+  const stored = getStoredSeverityFilter();
+  const map = [
+    ['reviewShowInaccuracy', 'inaccuracy'],
+    ['reviewShowMistake', 'mistake'],
+    ['reviewShowBlunder', 'blunder'],
+    ['analyzeShowInaccuracy', 'inaccuracy'],
+    ['analyzeShowMistake', 'mistake'],
+    ['analyzeShowBlunder', 'blunder'],
+  ];
+  const out = { ...stored };
+  let found = false;
+  for (const [id, key] of map) {
+    const el = $(id);
+    if (!el) continue;
+    out[key] = Boolean(el.checked);
+    found = true;
+  }
+  return found ? out : stored;
+}
+
+function applySeverityFilterToDom(filter) {
+  const f = {
+    inaccuracy: Boolean(filter?.inaccuracy),
+    mistake: Boolean(filter?.mistake),
+    blunder: Boolean(filter?.blunder),
+  };
+  const map = [
+    ['reviewShowInaccuracy', f.inaccuracy],
+    ['reviewShowMistake', f.mistake],
+    ['reviewShowBlunder', f.blunder],
+    ['analyzeShowInaccuracy', f.inaccuracy],
+    ['analyzeShowMistake', f.mistake],
+    ['analyzeShowBlunder', f.blunder],
+  ];
+  for (const [id, value] of map) {
+    const el = $(id);
+    if (el) el.checked = value;
+  }
+}
+
+function severityFilterQuery() {
+  const f = severityFilterFromDom();
+  const q = new URLSearchParams();
+  q.set('show_inaccuracy', f.inaccuracy ? '1' : '0');
+  q.set('show_mistake', f.mistake ? '1' : '0');
+  q.set('show_blunder', f.blunder ? '1' : '0');
+  return q.toString();
+}
+
 function metricsStorageKey(username) {
   return `${STORAGE_SESSION_PREFIX}${String(username || '').toLowerCase()}`;
 }
@@ -423,8 +547,8 @@ function findLineByUci(uci) {
 
 function currentAcceptWindow() {
   const reviewW = $('reviewAcceptWindow');
-  if (reviewW) return Number(reviewW.value || 50);
-  return Number($('cpWindow')?.value || 50);
+  if (reviewW) return Number(reviewW.value || 30);
+  return Number($('cpWindow')?.value || 30);
 }
 
 function acceptableLineSet() {
@@ -535,6 +659,42 @@ function closeReviewSettings() {
   o.hidden = true;
 }
 
+function openAnalyzeSettings() {
+  const o = $('analyzeSettingsOverlay');
+  if (!o) return;
+  o.hidden = false;
+}
+
+function closeAnalyzeSettings() {
+  const o = $('analyzeSettingsOverlay');
+  if (!o) return;
+  o.hidden = true;
+}
+
+function openAnalyzeClearConfirm() {
+  const o = $('analyzeClearOverlay');
+  if (!o) return;
+  o.hidden = false;
+}
+
+function closeAnalyzeClearConfirm() {
+  const o = $('analyzeClearOverlay');
+  if (!o) return;
+  o.hidden = true;
+}
+
+function openImportClearConfirm() {
+  const o = $('importClearOverlay');
+  if (!o) return;
+  o.hidden = false;
+}
+
+function closeImportClearConfirm() {
+  const o = $('importClearOverlay');
+  if (!o) return;
+  o.hidden = true;
+}
+
 function acceptableLines() {
   const allowed = acceptableLineSet();
   return (currentCard?.all_lines || []).filter((l) => allowed.has(l.first_move_uci));
@@ -619,6 +779,7 @@ function resetAttemptBox() {
   startCardTimer();
   clearAutoProceedTimer();
   if (attemptCardIdEl) attemptCardIdEl.textContent = currentCard ? `#${cardHash6(currentCard.card_id)}` : '-';
+  setPlayedMoveMetric(currentCard);
   if (answerEvalMetricEl) answerEvalMetricEl.textContent = '-';
   if (attemptListEl) attemptListEl.innerHTML = '';
   answerShown = false;
@@ -658,28 +819,6 @@ function activeUsername() {
     $('analyzeUser')?.value?.trim() ||
     selectedUser()
   );
-}
-
-function currentThreshold() {
-  const reviewT = Number($('reviewThreshold')?.value || 0);
-  if (reviewT) return reviewT;
-  return Number($('blunderCp')?.value || 200);
-}
-
-function currentObjectiveFloor() {
-  const reviewFloor = $('reviewObjectiveFloor');
-  if (reviewFloor) return Number(reviewFloor.value || -200);
-  const analyzeFloor = $('objectiveFloor');
-  if (analyzeFloor) return Number(analyzeFloor.value || -200);
-  return -200;
-}
-
-function currentWinningPrune() {
-  const reviewWin = $('reviewWinningPrune');
-  if (reviewWin) return Number(reviewWin.value || 300);
-  const analyzeWin = $('winningPrune');
-  if (analyzeWin) return Number(analyzeWin.value || 300);
-  return 300;
 }
 
 function percent(correct, total) {
@@ -761,6 +900,20 @@ function renderBarChartRows(containerEl, rows, { okBars = false } = {}) {
     .join('');
 }
 
+const statsChartInstances = {};
+
+function upsertChart(canvasId, cfg) {
+  const canvas = $(canvasId);
+  if (!canvas) return;
+  const ChartCtor = window.Chart;
+  if (!ChartCtor) return;
+  if (statsChartInstances[canvasId]) {
+    statsChartInstances[canvasId].destroy();
+    delete statsChartInstances[canvasId];
+  }
+  statsChartInstances[canvasId] = new ChartCtor(canvas, cfg);
+}
+
 async function loadStatsPage() {
   const sel = $('userSelectStats');
   const username = sel?.value || selectedUser();
@@ -784,29 +937,71 @@ async function loadStatsPage() {
   setTxt('statsEasy', s.easy ?? 0);
 
   const byDay = data.by_day || [];
-  renderBarChartRows(
-    $('statsReviewsByDay'),
-    byDay.map((r) => ({ label: r.day?.slice(5) || '-', value: Number(r.reviews || 0) }))
-  );
-  renderBarChartRows(
-    $('statsRetentionByDay'),
-    byDay.map((r) => ({ label: r.day?.slice(5) || '-', value: Number(r.retention_pct || 0), valueText: `${Number(r.retention_pct || 0).toFixed(1)}%` })),
-    { okBars: true }
-  );
-  renderBarChartRows($('statsRatingDist'), [
-    { label: 'Again', value: Number(s.again || 0) },
-    { label: 'Hard', value: Number(s.hard || 0) },
-    { label: 'Good', value: Number(s.good || 0) },
-    { label: 'Easy', value: Number(s.easy || 0) },
-  ]);
+  const dayLabels = byDay.map((r) => r.day?.slice(5) || '-');
+  const dayReviews = byDay.map((r) => Number(r.reviews || 0));
+  const dayRetention = byDay.map((r) => Number(r.retention_pct || 0));
+
   const b = data.interval_buckets || {};
-  renderBarChartRows($('statsIntervals'), [
-    { label: '<1d', value: Number(b['<1d'] || 0) },
-    { label: '1-3d', value: Number(b['1-3d'] || 0) },
-    { label: '4-7d', value: Number(b['4-7d'] || 0) },
-    { label: '8-30d', value: Number(b['8-30d'] || 0) },
-    { label: '31d+', value: Number(b['31d+'] || 0) },
-  ]);
+  const intervalLabels = ['<1d', '1-3d', '4-7d', '8-30d', '31d+'];
+  const intervalValues = intervalLabels.map((k) => Number(b[k] || 0));
+
+  upsertChart('statsChartReviews', {
+    type: 'line',
+    data: {
+      labels: dayLabels,
+      datasets: [{ label: 'Reviews', data: dayReviews, borderColor: '#68b0ff', backgroundColor: 'rgba(104,176,255,0.2)', tension: 0.25, fill: true }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { ticks: { color: '#a9bdd6' }, grid: { color: 'rgba(169,189,214,0.14)' } }, y: { ticks: { color: '#a9bdd6' }, grid: { color: 'rgba(169,189,214,0.14)' } } },
+    },
+  });
+
+  upsertChart('statsChartRetention', {
+    type: 'line',
+    data: {
+      labels: dayLabels,
+      datasets: [{ label: 'Retention %', data: dayRetention, borderColor: '#48c992', backgroundColor: 'rgba(72,201,146,0.2)', tension: 0.25, fill: true }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#a9bdd6' }, grid: { color: 'rgba(169,189,214,0.14)' } },
+        y: { min: 0, max: 100, ticks: { color: '#a9bdd6', callback: (v) => `${v}%` }, grid: { color: 'rgba(169,189,214,0.14)' } },
+      },
+    },
+  });
+
+  upsertChart('statsChartButtons', {
+    type: 'doughnut',
+    data: {
+      labels: ['Again', 'Hard', 'Good', 'Easy'],
+      datasets: [{ data: [Number(s.again || 0), Number(s.hard || 0), Number(s.good || 0), Number(s.easy || 0)], backgroundColor: ['#de5959', '#c89a4b', '#2ab980', '#3cb7c9'] }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#d8e7fa' } } },
+    },
+  });
+
+  upsertChart('statsChartIntervals', {
+    type: 'bar',
+    data: {
+      labels: intervalLabels,
+      datasets: [{ label: 'Cards', data: intervalValues, backgroundColor: 'rgba(104,176,255,0.72)', borderColor: '#68b0ff', borderWidth: 1 }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { ticks: { color: '#a9bdd6' }, grid: { color: 'rgba(169,189,214,0.14)' } }, y: { ticks: { color: '#a9bdd6' }, grid: { color: 'rgba(169,189,214,0.14)' } } },
+    },
+  });
 }
 
 function renderUserCards(users) {
@@ -871,12 +1066,8 @@ function setQueueMetricsFromStats(s) {
 async function refreshReviewQueueMetrics(username) {
   if (!username) return;
   try {
-    const threshold = currentThreshold();
-    const floor = currentObjectiveFloor();
-    const winningPrune = currentWinningPrune();
-    const res = await fetch(
-      `/api/stats/${encodeURIComponent(username)}?blunder_threshold=${encodeURIComponent(String(threshold))}&objective_floor_cp=${encodeURIComponent(String(floor))}&winning_prune_cp=${encodeURIComponent(String(winningPrune))}`
-    );
+    const severityQ = severityFilterQuery();
+    const res = await fetch(`/api/stats/${encodeURIComponent(username)}?${severityQ}`);
     if (!res.ok) throw new Error(`stats ${res.status}`);
     const s = await res.json();
     setQueueMetricsFromStats(s);
@@ -886,12 +1077,8 @@ async function refreshReviewQueueMetrics(username) {
 }
 
 async function fetchUsers() {
-  const threshold = currentThreshold();
-  const floor = currentObjectiveFloor();
-  const winningPrune = currentWinningPrune();
-  const res = await fetch(
-    `/api/users?blunder_threshold=${encodeURIComponent(String(threshold))}&objective_floor_cp=${encodeURIComponent(String(floor))}&winning_prune_cp=${encodeURIComponent(String(winningPrune))}`
-  );
+  const severityQ = severityFilterQuery();
+  const res = await fetch(`/api/users?${severityQ}`);
   if (!res.ok) throw new Error(`users fetch failed: ${res.status}`);
   const data = await res.json();
   usersCache = data.users || [];
@@ -1105,14 +1292,10 @@ async function onMove(orig, dest) {
 async function loadCard() {
   const username = $('userSelectReview')?.value || selectedUser();
   if (!username) return setReviewMoveStatus('Pick a user.', 'error');
-  const threshold = currentThreshold();
-  const floor = currentObjectiveFloor();
-  const winningPrune = currentWinningPrune();
+  const severityQ = severityFilterQuery();
   setSelectedUser(username);
   await refreshReviewQueueMetrics(username);
-  const res = await fetch(
-    `/api/review/next/${encodeURIComponent(username)}?blunder_threshold=${encodeURIComponent(String(threshold))}&objective_floor_cp=${encodeURIComponent(String(floor))}&winning_prune_cp=${encodeURIComponent(String(winningPrune))}`
-  );
+  const res = await fetch(`/api/review/next/${encodeURIComponent(username)}?${severityQ}`);
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
   const data = await res.json();
   if (!data.card) {
@@ -1122,6 +1305,7 @@ async function loadCard() {
     tickCardTimer();
     clearBoardDecorations();
     clearBoardOverlay();
+    setPlayedMoveMetric(null);
     setGradeButtonsDefault();
     if (infoEl) infoEl.textContent = 'No due cards.';
     setReviewMoveStatus('No due cards.', 'idle');
@@ -1227,17 +1411,6 @@ function wireCommon() {
   window.addEventListener('error', (e) => log(`JS error: ${e.message}`));
   window.addEventListener('unhandledrejection', (e) => log(`Promise error: ${e.reason?.message || String(e.reason)}`));
 
-  const refreshUsersBtn = $('refreshUsers');
-  if (refreshUsersBtn) {
-    refreshUsersBtn.addEventListener('click', async () => {
-      try {
-        await fetchUsers();
-      } catch (e) {
-        log(`Refresh profiles error: ${e.message}`);
-      }
-    });
-  }
-
   const selAnalyze = $('userSelectAnalyze');
   if (selAnalyze) {
     selAnalyze.addEventListener('change', () => setSelectedUser(selAnalyze.value));
@@ -1253,18 +1426,41 @@ function wireCommon() {
     });
   }
 
+  applySeverityFilterToDom(getStoredSeverityFilter());
+  const severityIds = [
+    'analyzeShowInaccuracy',
+    'analyzeShowMistake',
+    'analyzeShowBlunder',
+    'reviewShowInaccuracy',
+    'reviewShowMistake',
+    'reviewShowBlunder',
+  ];
+  for (const id of severityIds) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener('change', async () => {
+      const filter = severityFilterFromDom();
+      applySeverityFilterToDom(filter);
+      saveSeverityFilter(filter);
+      try {
+        await fetchUsers();
+        const ru = $('userSelectReview')?.value || selectedUser();
+        if (ru) {
+          await refreshReviewQueueMetrics(ru);
+          if ($('userSelectReview')) await loadCard();
+        }
+      } catch (e) {
+        log(`Class filter update failed: ${e.message}`);
+      }
+    });
+  }
+
   const sliderMap = [
     ['depth', 'depthValue'],
     ['multipv', 'multipvValue'],
     ['openingSkip', 'openingSkipValue'],
     ['cpWindow', 'cpWindowValue'],
-    ['blunderCp', 'blunderCpValue'],
-    ['objectiveFloor', 'objectiveFloorValue'],
-    ['winningPrune', 'winningPruneValue'],
-    ['reviewThreshold', 'reviewThresholdValue'],
-    ['reviewObjectiveFloor', 'reviewObjectiveFloorValue'],
     ['reviewAcceptWindow', 'reviewAcceptWindowValue'],
-    ['reviewWinningPrune', 'reviewWinningPruneValue'],
     ['statsDays', 'statsDaysValue'],
   ];
   for (const [inputId, outId] of sliderMap) {
@@ -1278,30 +1474,6 @@ function wireCommon() {
     sync();
   }
 
-  const reviewThreshold = $('reviewThreshold');
-  if (reviewThreshold) {
-    reviewThreshold.addEventListener('change', async () => {
-      try {
-        await fetchUsers();
-        await refreshReviewQueueMetrics($('userSelectReview')?.value || selectedUser());
-        if ($('userSelectReview')?.value) await loadCard();
-      } catch (e) {
-        log(`Threshold update failed: ${e.message}`);
-      }
-    });
-  }
-  const reviewObjectiveFloor = $('reviewObjectiveFloor');
-  if (reviewObjectiveFloor) {
-    reviewObjectiveFloor.addEventListener('change', async () => {
-      try {
-        await fetchUsers();
-        await refreshReviewQueueMetrics($('userSelectReview')?.value || selectedUser());
-        if ($('userSelectReview')?.value) await loadCard();
-      } catch (e) {
-        log(`Eval floor update failed: ${e.message}`);
-      }
-    });
-  }
   const reviewAcceptWindow = $('reviewAcceptWindow');
   if (reviewAcceptWindow) {
     reviewAcceptWindow.addEventListener('change', () => {
@@ -1310,29 +1482,6 @@ function wireCommon() {
       setReviewMoveStatus('Window updated.', 'idle');
     });
   }
-  const reviewWinningPrune = $('reviewWinningPrune');
-  if (reviewWinningPrune) {
-    reviewWinningPrune.addEventListener('change', async () => {
-      try {
-        await fetchUsers();
-        await refreshReviewQueueMetrics($('userSelectReview')?.value || selectedUser());
-        if ($('userSelectReview')?.value) await loadCard();
-      } catch (e) {
-        log(`Winning prune update failed: ${e.message}`);
-      }
-    });
-  }
-  const winningPrune = $('winningPrune');
-  if (winningPrune) {
-    winningPrune.addEventListener('change', async () => {
-      try {
-        await fetchUsers();
-      } catch (e) {
-        log(`Winning prune update failed: ${e.message}`);
-      }
-    });
-  }
-
   const reviewSettingsBtn = $('reviewSettingsBtn');
   if (reviewSettingsBtn) {
     reviewSettingsBtn.addEventListener('click', () => openReviewSettings());
@@ -1345,9 +1494,42 @@ function wireCommon() {
   if (reviewSettingsBackdrop) {
     reviewSettingsBackdrop.addEventListener('click', () => closeReviewSettings());
   }
+  const analyzeSettingsBtn = $('analyzeSettingsBtn');
+  if (analyzeSettingsBtn) {
+    analyzeSettingsBtn.addEventListener('click', () => openAnalyzeSettings());
+  }
+  const analyzeSettingsClose = $('analyzeSettingsClose');
+  if (analyzeSettingsClose) {
+    analyzeSettingsClose.addEventListener('click', () => closeAnalyzeSettings());
+  }
+  const analyzeSettingsBackdrop = $('analyzeSettingsBackdrop');
+  if (analyzeSettingsBackdrop) {
+    analyzeSettingsBackdrop.addEventListener('click', () => closeAnalyzeSettings());
+  }
+  const analyzeClearBackdrop = $('analyzeClearBackdrop');
+  if (analyzeClearBackdrop) {
+    analyzeClearBackdrop.addEventListener('click', () => closeAnalyzeClearConfirm());
+  }
+  const analyzeClearCancel = $('analyzeClearCancel');
+  if (analyzeClearCancel) {
+    analyzeClearCancel.addEventListener('click', () => closeAnalyzeClearConfirm());
+  }
+  const importClearBackdrop = $('importClearBackdrop');
+  if (importClearBackdrop) {
+    importClearBackdrop.addEventListener('click', () => closeImportClearConfirm());
+  }
+  const importClearCancel = $('importClearCancel');
+  if (importClearCancel) {
+    importClearCancel.addEventListener('click', () => closeImportClearConfirm());
+  }
 
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeReviewSettings();
+    if (e.key === 'Escape') {
+      closeReviewSettings();
+      closeAnalyzeSettings();
+      closeAnalyzeClearConfirm();
+      closeImportClearConfirm();
+    }
   });
 
   const autoGradeMode = $('autoGradeMode');
@@ -1369,6 +1551,18 @@ function wireCommon() {
 }
 
 function wireImportPage() {
+  const renderImportProgress = (p) => {
+    const msg = String(p?.message || '').trim();
+    if (msg) {
+      setImportStatus(msg, 'busy');
+      return;
+    }
+    const done = Number(p?.done || 0);
+    const total = Number(p?.total || 0);
+    if (total > 0) setImportStatus(`Importing... ${done}/${total} games`, 'busy');
+    else setImportStatus(`Importing... ${done} games`, 'busy');
+  };
+
   const btnL = $('importLichess');
   if (btnL) {
     btnL.addEventListener('click', async (ev) => {
@@ -1389,10 +1583,7 @@ function wireImportPage() {
           const res = await fetch(`/api/import/progress/${encodeURIComponent(jobId)}`);
           if (!res.ok) throw new Error(`progress ${res.status}`);
           const p = await res.json();
-          const done = Number(p.done || 0);
-          const total = Number(p.total || 0);
-          if (total > 0) setImportStatus(`Importing... ${done}/${total} games`, 'busy');
-          else setImportStatus(`Importing... ${done} games`, 'busy');
+          renderImportProgress(p);
           if (p.state === 'done') {
             finalOut = { imported: Number(p.imported || 0), skipped: Number(p.skipped || 0) };
             break;
@@ -1432,10 +1623,7 @@ function wireImportPage() {
           const res = await fetch(`/api/import/progress/${encodeURIComponent(jobId)}`);
           if (!res.ok) throw new Error(`progress ${res.status}`);
           const p = await res.json();
-          const done = Number(p.done || 0);
-          const total = Number(p.total || 0);
-          if (total > 0) setImportStatus(`Importing... ${done}/${total} games`, 'busy');
-          else setImportStatus(`Importing... ${done} games`, 'busy');
+          renderImportProgress(p);
           if (p.state === 'done') {
             finalOut = { imported: Number(p.imported || 0), skipped: Number(p.skipped || 0) };
             break;
@@ -1498,6 +1686,29 @@ function wireImportPage() {
         log(`DB import failed: ${e.message}`);
       } finally {
         setBtnBusy(btn, false, 'Importing DB...');
+      }
+    });
+  }
+
+  const clearAllImportsBtn = $('clearAllImportsBtn');
+  if (clearAllImportsBtn) {
+    clearAllImportsBtn.addEventListener('click', () => openImportClearConfirm());
+  }
+  const importClearConfirm = $('importClearConfirm');
+  if (importClearConfirm) {
+    importClearConfirm.addEventListener('click', async () => {
+      closeImportClearConfirm();
+      setImportStatus('Clearing all imports...', 'busy');
+      setBtnBusy(clearAllImportsBtn, true, 'Clearing...');
+      try {
+        const out = await postJson('/api/import/clear-all', {});
+        setImportStatus(`Cleared ${out.games_deleted} games.`, 'ok');
+        await fetchUsers();
+      } catch (e) {
+        setImportStatus('Clear imports failed.', 'error');
+        log(`Clear imports failed: ${e.message}`);
+      } finally {
+        setBtnBusy(clearAllImportsBtn, false, 'Clearing...');
       }
     });
   }
@@ -1566,10 +1777,13 @@ async function analyzeSinglePositionWasm(fen, playedUci, sideToMove, cfg) {
     }
   }
   const lossCp = Number(bestCp) - Number(playedCp);
+  const cls = classifyByWinningChanceDelta(bestCp, playedCp);
   return {
     bestCp: Number(bestCp),
     playedCp: Number(playedCp),
     lossCp: Number(lossCp),
+    judgement: cls.judgement,
+    winningChanceDelta: Number(cls.delta || 0),
     candidates,
   };
 }
@@ -1577,14 +1791,18 @@ async function analyzeSinglePositionWasm(fen, playedUci, sideToMove, cfg) {
 async function analyzeGameInBrowser(game, cfg) {
   if (!ChessCtor) await ensureBoardDeps();
   const pgnChess = new ChessCtor();
-  const ok = pgnChess.loadPgn(game.pgn, { strict: false });
-  if (!ok) return { positions: [], blunders: 0 };
+  try {
+    pgnChess.loadPgn(game.pgn, { strict: false });
+  } catch {
+    return { positions: [], blunders: 0 };
+  }
   const moves = pgnChess.history({ verbose: true });
   const board = new ChessCtor();
   const userSide = game.played_color === 'white' ? 'white' : 'black';
   let userMoveIndex = 0;
   let blunders = 0;
   const positions = [];
+  let errors = 0;
 
   for (let i = 0; i < moves.length; i += 1) {
     const mv = moves[i];
@@ -1602,8 +1820,19 @@ async function analyzeGameInBrowser(game, cfg) {
 
     const fen = board.fen();
     const playedUci = moveObjToUci(mv);
-    const analysis = await analyzeSinglePositionWasm(fen, playedUci, sideToMove, cfg);
-    const isBlunder = analysis.lossCp >= cfg.blunderCp;
+    let analysis = null;
+    try {
+      analysis = await analyzeSinglePositionWasm(fen, playedUci, sideToMove, cfg);
+    } catch {
+      errors += 1;
+      board.move(moveObj);
+      continue;
+    }
+    if (!analysis.judgement) {
+      board.move(moveObj);
+      continue;
+    }
+    const isBlunder = analysis.judgement === 'blunder';
     if (isBlunder) blunders += 1;
 
     const practical = (() => {
@@ -1625,9 +1854,14 @@ async function analyzeGameInBrowser(game, cfg) {
 
     let cpAfter = null;
     if (practical) {
-      const infos = await stockfishAnalyze(practical.fen_after, { depth: Math.max(6, cfg.depth - 2), multipv: 1 });
-      const cpFromTurn = infos[0] ? scoreToCp(infos[0].score) : null;
-      cpAfter = scoreForPov(cpFromTurn, fenTurn(practical.fen_after), userSide);
+      try {
+        const infos = await stockfishAnalyze(practical.fen_after, { depth: Math.max(6, cfg.depth - 2), multipv: 1 });
+        const cpFromTurn = infos[0] ? scoreToCp(infos[0].score) : null;
+        cpAfter = scoreForPov(cpFromTurn, fenTurn(practical.fen_after), userSide);
+      } catch {
+        errors += 1;
+        cpAfter = null;
+      }
     }
 
     positions.push({
@@ -1639,7 +1873,8 @@ async function analyzeGameInBrowser(game, cfg) {
       best_cp: analysis.bestCp,
       played_cp: analysis.playedCp,
       loss_cp: analysis.lossCp,
-      is_blunder: isBlunder,
+      judgement: analysis.judgement,
+      winning_chance_delta: analysis.winningChanceDelta,
       candidate_lines: analysis.candidates,
       practical_response: practical
         ? {
@@ -1653,7 +1888,7 @@ async function analyzeGameInBrowser(game, cfg) {
     board.move(moveObj);
   }
 
-  return { positions, blunders };
+  return { positions, blunders, errors };
 }
 
 function wireAnalyzePage() {
@@ -1671,9 +1906,7 @@ function wireAnalyzePage() {
           depth: Number($('depth')?.value || 10),
           multipv: Number($('multipv')?.value || 4),
           openingSkip: Number($('openingSkip')?.value || 0),
-          cpWindow: Number($('cpWindow')?.value || 50),
-          blunderCp: Number($('blunderCp')?.value || 200),
-          objectiveFloor: Number($('objectiveFloor')?.value || -200),
+          cpWindow: Number($('cpWindow')?.value || 30),
         };
 
         await ensureBoardDeps();
@@ -1691,20 +1924,29 @@ function wireAnalyzePage() {
         let done = 0;
         let totalPositions = 0;
         let totalBlunders = 0;
+        let totalErrors = 0;
+        let failedGames = 0;
         for (const g of games) {
-          setAnalyzeStatus(`Analyzing... ${done}/${total} games`, 'busy');
-          const out = await analyzeGameInBrowser(g, cfg);
-          await postJson('/api/analyze/store-game', {
-            game_id: g.id,
-            positions: out.positions,
-          });
+          setAnalyzeStatus(`Analyzing... ${done}/${total} games • errors ${totalErrors}`, 'busy');
+          try {
+            const out = await analyzeGameInBrowser(g, cfg);
+            await postJson('/api/analyze/store-game', {
+              game_id: g.id,
+              positions: out.positions,
+            });
+            totalPositions += Number(out.positions.length || 0);
+            totalBlunders += Number(out.blunders || 0);
+            totalErrors += Number(out.errors || 0);
+          } catch (e) {
+            failedGames += 1;
+            totalErrors += 1;
+            log(`Analyze game failed id=${g.id}: ${e.message}`);
+          }
           done += 1;
-          totalPositions += Number(out.positions.length || 0);
-          totalBlunders += Number(out.blunders || 0);
-          setAnalyzeStatus(`Analyzing... ${done}/${total} games`, 'busy');
+          setAnalyzeStatus(`Analyzing... ${done}/${total} games • errors ${totalErrors}`, 'busy');
         }
-        const out = { games: done, positions: totalPositions, blunders: totalBlunders };
-        setAnalyzeStatus(`Done: ${out.games}g ${out.positions}p ${out.blunders}b`, 'ok');
+        const out = { games: done, positions: totalPositions, blunders: totalBlunders, errors: totalErrors, failed_games: failedGames };
+        setAnalyzeStatus(`Done: ${out.games}g ${out.positions}p ${out.blunders}b • errors ${out.errors} • failed ${out.failed_games}`, out.errors ? 'error' : 'ok');
         await fetchUsers();
       } catch (e) {
         log(`Analyze failed: ${e.message}`);
@@ -1716,23 +1958,35 @@ function wireAnalyzePage() {
   }
 
   const flushBtn = $('resetAnalyzeBtn');
+  const clearConfirmBtn = $('analyzeClearConfirm');
+
+  async function clearAnalyzeDataForSelectedUser() {
+    const username = $('userSelectAnalyze')?.value || selectedUser();
+    if (!username) return setAnalyzeStatus('Pick a user.', 'error');
+    setBtnBusy(flushBtn, true, 'Clearing...');
+    setAnalyzeStatus('Clearing...', 'busy');
+    closeAnalyzeClearConfirm();
+    try {
+      const out = await postJson('/api/analyze/reset', { username });
+      setAnalyzeStatus(`Cleared: ${out.positions_deleted} positions.`, 'ok');
+      await fetchUsers();
+    } catch (e) {
+      setAnalyzeStatus('Clear failed.', 'error');
+    } finally {
+      setBtnBusy(flushBtn, false, 'Clearing...');
+    }
+  }
+
   if (flushBtn) {
-    flushBtn.addEventListener('click', async (ev) => {
-      const btn = ev.currentTarget;
+    flushBtn.addEventListener('click', () => {
       const username = $('userSelectAnalyze')?.value || selectedUser();
       if (!username) return setAnalyzeStatus('Pick a user.', 'error');
-      if (!window.confirm(`Flush all analyzed positions/cards for ${username}?`)) return;
-      setBtnBusy(btn, true, 'Flushing...');
-      setAnalyzeStatus('Flushing...', 'busy');
-      try {
-        const out = await postJson('/api/analyze/reset', { username });
-        setAnalyzeStatus(`Flushed: ${out.positions_deleted} positions.`, 'ok');
-        await fetchUsers();
-      } catch (e) {
-        setAnalyzeStatus('Flush failed.', 'error');
-      } finally {
-        setBtnBusy(btn, false, 'Flushing...');
-      }
+      openAnalyzeClearConfirm();
+    });
+  }
+  if (clearConfirmBtn) {
+    clearConfirmBtn.addEventListener('click', () => {
+      void clearAnalyzeDataForSelectedUser();
     });
   }
 }
