@@ -66,16 +66,16 @@
           <div class="review-side-column">
             <div class="attempt-box">
               <div class="attempt-head">
-                <span>Card</span>
+                <span>Position</span>
                 <strong id="attemptCardId">-</strong>
               </div>
               <div class="attempt-timer" id="attemptTimer">00:00</div>
-              <div class="attempt-head">
+              <div class="attempt-head" id="attemptPlayedRow">
                 <span>You Played</span>
                 <strong id="attemptPlayedMove">-</strong>
               </div>
               <div class="attempt-head">
-                <span>Position Eval</span>
+                <span>Evaluation</span>
                 <strong id="answerEvalMetric">-</strong>
               </div>
               <div class="attempt-list-wrap">
@@ -131,11 +131,25 @@
                 <span class="switch-track"></span>
               </span>
             </label>
+            <label class="switch-label">Hide Played Move
+              <span class="switch">
+                <input id="hidePlayedMove" type="checkbox" />
+                <span class="switch-track"></span>
+              </span>
+            </label>
             <label class="switch-label">Exclude Lost Positions
               <span class="switch">
                 <input id="reviewExcludeLost" type="checkbox" />
                 <span class="switch-track"></span>
               </span>
+            </label>
+            <label>Board Theme
+              <select id="reviewBoardTheme">
+                <option value="brown">Brown</option>
+                <option value="blue">Blue</option>
+                <option value="green">Green</option>
+                <option value="slate">Slate</option>
+              </select>
             </label>
             <label class="severity-filter">Include
               <span class="severity-options">
@@ -152,10 +166,6 @@
         </section>
       </div>
 
-      <section class="glass-panel">
-        <h2>Imported Profiles</h2>
-        <div id="userCards" class="profiles-grid"></div>
-      </section>
     </main>
     <script type="module" src="./app.js"></script>
   </body>

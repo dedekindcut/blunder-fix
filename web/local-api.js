@@ -564,6 +564,36 @@ async function handleImportClearAll() {
   });
 }
 
+async function handleImportClearUser(body) {
+  const username = lower(body?.username || '');
+  if (!username) return toJsonResponse({ detail: 'Missing username' }, 400);
+
+  const gameIds = new Set(stateCache.games.filter((g) => lower(g.username) === username).map((g) => g.id));
+  const positionIds = new Set(stateCache.positions.filter((p) => gameIds.has(p.game_id)).map((p) => p.id));
+  const cardIds = new Set(stateCache.cards.filter((c) => positionIds.has(c.position_id)).map((c) => c.id));
+
+  const gamesDeleted = gameIds.size;
+  const positionsDeleted = positionIds.size;
+  const cardsDeleted = cardIds.size;
+  const reviewsDeleted = stateCache.reviews.filter((r) => cardIds.has(Number(r.card_id))).length;
+
+  stateCache.games = stateCache.games.filter((g) => !gameIds.has(g.id));
+  stateCache.positions = stateCache.positions.filter((p) => !positionIds.has(p.id));
+  stateCache.candidate_lines = stateCache.candidate_lines.filter((l) => !positionIds.has(l.position_id));
+  stateCache.practical_responses = stateCache.practical_responses.filter((r) => !positionIds.has(r.position_id));
+  stateCache.cards = stateCache.cards.filter((c) => !cardIds.has(c.id));
+  stateCache.reviews = stateCache.reviews.filter((r) => !cardIds.has(Number(r.card_id)));
+
+  await saveState();
+  return toJsonResponse({
+    username,
+    games_deleted: gamesDeleted,
+    positions_deleted: positionsDeleted,
+    cards_deleted: cardsDeleted,
+    reviews_deleted: reviewsDeleted,
+  });
+}
+
 async function handleImportPgn(options) {
   const form = options?.body instanceof FormData ? options.body : null;
   const file = form ? form.get('file') : null;
@@ -1000,6 +1030,7 @@ async function routeApi(url, options = {}) {
   if (path === '/api/import/pgn' && method === 'POST') return handleImportPgn(options);
   if (path.startsWith('/api/import/progress/') && method === 'GET') return handleImportProgress(path.split('/').pop() || '');
   if (path === '/api/import/clear-all' && method === 'POST') return handleImportClearAll();
+  if (path === '/api/import/clear-user' && method === 'POST') return handleImportClearUser(body || {});
 
   if (path.startsWith('/api/analyze/games/') && method === 'GET') {
     return handleAnalyzeGames(decodeURIComponent(path.split('/').pop() || ''), url);

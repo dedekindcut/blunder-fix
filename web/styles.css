@@ -540,10 +540,24 @@ button:disabled {
 
 .profile-card {
   display: block;
+  position: relative;
   width: 100%;
   border-bottom: 1px solid rgba(173, 197, 228, 0.22);
-  padding: 0.5rem 0.1rem;
+  padding: 0.5rem 2rem 0.5rem 0.1rem;
   background: transparent;
+}
+
+.profile-delete-btn {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.1rem;
+  width: 1.35rem;
+  height: 1.35rem;
+  min-width: 1.35rem;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 0.95rem;
+  line-height: 1;
 }
 
 .profile-name {
@@ -772,6 +786,58 @@ button:disabled {
   aspect-ratio: 1 / 1;
 }
 
+#board[data-theme='brown'] cg-board {
+  filter: none;
+  background-image: conic-gradient(
+    from 90deg,
+    #f0d9b5 25%,
+    #b58863 0 50%,
+    #f0d9b5 0 75%,
+    #b58863 0
+  ) !important;
+  background-size: 25% 25% !important;
+  background-position: 0 0 !important;
+}
+
+#board[data-theme='blue'] cg-board {
+  filter: none;
+  background-image: conic-gradient(
+    from 90deg,
+    #e3edf5 25%,
+    #7f9db2 0 50%,
+    #e3edf5 0 75%,
+    #7f9db2 0
+  ) !important;
+  background-size: 25% 25% !important;
+  background-position: 0 0 !important;
+}
+
+#board[data-theme='green'] cg-board {
+  filter: none;
+  background-image: conic-gradient(
+    from 90deg,
+    #eeeed2 25%,
+    #769656 0 50%,
+    #eeeed2 0 75%,
+    #769656 0
+  ) !important;
+  background-size: 25% 25% !important;
+  background-position: 0 0 !important;
+}
+
+#board[data-theme='slate'] cg-board {
+  filter: none;
+  background-image: conic-gradient(
+    from 90deg,
+    #d9dde3 25%,
+    #6f7a88 0 50%,
+    #d9dde3 0 75%,
+    #6f7a88 0
+  ) !important;
+  background-size: 25% 25% !important;
+  background-position: 0 0 !important;
+}
+
 .board-overlay {
   position: absolute;
   inset: 0;
@@ -973,6 +1039,14 @@ pre {
   height: 220px !important;
 }
 
+.app-wrap[data-page='stats'] .glass-panel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
 @media (max-width: 860px) {
   html,
   body {
@@ -1112,7 +1186,7 @@ pre {
   #openLichessAnalysis { order: 6; margin-top: 0.3rem; margin-left: 0; margin-right: 0; width: auto; }
   #viewSourceGame { order: 7; margin-top: 0.25rem; margin-left: 0; margin-right: 0; width: auto; }
   #engineStatus { order: 8; margin-top: 0.35rem; margin-left: 0; margin-right: 0; }
-  #autoNextWrap { order: 9; margin-top: 0.2rem; margin-left: 0; margin-right: 0; }
+  #autoNextWrap { order: 2; margin-top: -0.15rem; margin-bottom: 0.45rem; margin-left: 0; margin-right: 0; }
   #reviewMoveStatus { order: 10; margin-top: 0.2rem; margin-left: 0; margin-right: 0; }
 
   .stats-grid {

@@ -10,7 +10,9 @@ const STORAGE_USER_KEY = 'bf:selectedUser';
 const STORAGE_AUTO_GRADE_KEY = 'bf:autoGradeMode';
 const STORAGE_OPP_RESPONSE_KEY = 'bf:opponentResponseMode';
 const STORAGE_SHOW_POSITION_EVAL_KEY = 'bf:showPositionEval';
+const STORAGE_HIDE_PLAYED_MOVE_KEY = 'bf:hidePlayedMove';
 const STORAGE_EXCLUDE_LOST_KEY = 'bf:excludeLostPositions';
+const STORAGE_BOARD_THEME_KEY = 'bf:boardTheme';
 const STORAGE_SEVERITY_FILTER_KEY = 'bf:severityFilter';
 
 const logEl = $('log');
@@ -33,6 +35,7 @@ const metricQueueWrongEl = $('metricQueueWrong');
 const metricQueueNewEl = $('metricQueueNew');
 const attemptCardIdEl = $('attemptCardId');
 const attemptTimerEl = $('attemptTimer');
+const attemptPlayedRowEl = $('attemptPlayedRow');
 const attemptPlayedMoveEl = $('attemptPlayedMove');
 const attemptListEl = $('attemptList');
 const answerEvalMetricEl = $('answerEvalMetric');
@@ -97,6 +100,20 @@ function setPlayedMoveMetric(card) {
   attemptPlayedMoveEl.textContent = `${san}${sev.suffix}`;
   attemptPlayedMoveEl.classList.remove('played-severe', 'played-mistake', 'played-inaccuracy');
   attemptPlayedMoveEl.classList.add(sev.cls);
+}
+
+function isHidePlayedMoveEnabled() {
+  return Boolean($('hidePlayedMove')?.checked);
+}
+
+function syncPlayedMoveMetric() {
+  const concealed = isHidePlayedMoveEnabled() && !answerShown;
+  if (attemptPlayedRowEl) attemptPlayedRowEl.hidden = concealed;
+  if (concealed) {
+    setPlayedMoveMetric(null);
+    return;
+  }
+  setPlayedMoveMetric(currentCard);
 }
 
 function setAnswerEvalMetric(cp) {
@@ -394,7 +411,11 @@ async function evaluateFenLines(fen, { depth = 12, multipv = 4, cpWindow = 30, p
 
 function setStatus(el, msg, type = 'idle') {
   if (!el) return;
-  el.textContent = msg;
+  const text = String(msg || '').trim();
+  const hideWhenIdle = (el === importStatusEl || el === analyzeStatusEl || el === engineStatusEl) && type === 'idle';
+  const hideAnalyzeErrors = el === analyzeErrorsEl && (type !== 'error' || !text);
+  el.hidden = hideWhenIdle || hideAnalyzeErrors;
+  el.textContent = text;
   el.dataset.type = type;
 }
 
@@ -549,6 +570,22 @@ function isOpponentResponseEnabled() {
 
 function isShowPositionEvalEnabled() {
   return Boolean($('showPositionEval')?.checked);
+}
+
+function storedBoardTheme() {
+  const v = String(localStorage.getItem(STORAGE_BOARD_THEME_KEY) || 'brown').toLowerCase();
+  return ['brown', 'blue', 'green', 'slate'].includes(v) ? v : 'brown';
+}
+
+function currentBoardTheme() {
+  const v = String($('reviewBoardTheme')?.value || storedBoardTheme()).toLowerCase();
+  return ['brown', 'blue', 'green', 'slate'].includes(v) ? v : 'brown';
+}
+
+function applyBoardTheme() {
+  const boardEl = $('board');
+  if (!boardEl) return;
+  boardEl.dataset.theme = currentBoardTheme();
 }
 
 function syncPositionEvalMetric() {
@@ -817,12 +854,12 @@ function resetAttemptBox() {
   cardStartedAt = Date.now();
   startCardTimer();
   clearAutoProceedTimer();
-  if (attemptCardIdEl) attemptCardIdEl.textContent = currentCard ? `#${cardHash6(currentCard.card_id)}` : '-';
-  setPlayedMoveMetric(currentCard);
-  syncPositionEvalMetric();
-  if (attemptListEl) attemptListEl.innerHTML = '';
   answerShown = false;
   answerRevealed = false;
+  if (attemptCardIdEl) attemptCardIdEl.textContent = currentCard ? `#${cardHash6(currentCard.card_id)}` : '-';
+  syncPlayedMoveMetric();
+  syncPositionEvalMetric();
+  if (attemptListEl) attemptListEl.innerHTML = '';
   awaitingOpponentResponse = false;
   opponentResponseMoves = new Set();
   opponentPhaseFen = null;
@@ -1087,6 +1124,7 @@ async function loadStatsPage() {
 
 function renderUserCards(users) {
   if (!userCardsEl) return;
+  const isImportPage = Boolean($('clearAllImportsBtn'));
   if (!users.length) {
     userCardsEl.innerHTML = '<p class="status">No imported users yet.</p>';
     return;
@@ -1098,6 +1136,7 @@ function renderUserCards(users) {
       <article class="profile-card">
         <h3 class="profile-name">${u.username}:</h3>
         <div class="profile-stats">games ${u.games} • positions ${u.positions} • blunders ${u.blunders} • due ${u.due_cards}</div>
+        ${isImportPage ? `<button class="profile-delete-btn danger-btn" data-delete-user="${u.username}" title="Delete profile ${u.username}" aria-label="Delete profile ${u.username}">×</button>` : ''}
       </article>
     `
     )
@@ -1280,6 +1319,7 @@ async function ensureBoardDeps() {
 function setupBoard(card) {
   const boardEl = $('board');
   if (!boardEl) return;
+  applyBoardTheme();
   if (!cg) {
     cg = ChessgroundCtor(boardEl, {
       draggable: { enabled: true, showGhost: true },
@@ -1348,6 +1388,7 @@ function resetToCardPosition() {
       drawable: { autoShapes: [] },
     });
   }
+  syncPlayedMoveMetric();
   syncPositionEvalMetric();
 }
 
@@ -1429,6 +1470,7 @@ async function onMove(orig, dest) {
   if (ok && !inOppPhase) {
     answerShown = true;
     answerRevealed = false;
+    syncPlayedMoveMetric();
     setShowAnswerButtonState();
     syncBoardArrows();
     setAnswerEvalMetric(line?.cp ?? null);
@@ -1458,6 +1500,7 @@ async function loadCard() {
     clearBoardDecorations();
     clearBoardOverlay();
     setPlayedMoveMetric(null);
+    if (attemptPlayedRowEl) attemptPlayedRowEl.hidden = false;
     const viewSourceBtn = $('viewSourceGame');
     if (viewSourceBtn) viewSourceBtn.hidden = true;
     setGradeButtonsDefault();
@@ -1545,6 +1588,7 @@ function showAnswer() {
   resetOpponentReplyArrows();
   answerShown = true;
   answerRevealed = true;
+  syncPlayedMoveMetric();
   setShowAnswerButtonState();
   syncBoardArrows();
   const cardId = currentCard.card_id;
@@ -1734,9 +1778,27 @@ function wireCommon() {
       syncPositionEvalMetric();
     });
   }
+  const hidePlayedMove = $('hidePlayedMove');
+  if (hidePlayedMove) {
+    hidePlayedMove.checked = localStorage.getItem(STORAGE_HIDE_PLAYED_MOVE_KEY) === '1';
+    hidePlayedMove.addEventListener('change', () => {
+      localStorage.setItem(STORAGE_HIDE_PLAYED_MOVE_KEY, hidePlayedMove.checked ? '1' : '0');
+      syncPlayedMoveMetric();
+    });
+  }
+  const reviewBoardTheme = $('reviewBoardTheme');
+  if (reviewBoardTheme) {
+    reviewBoardTheme.value = storedBoardTheme();
+    reviewBoardTheme.addEventListener('change', () => {
+      const theme = currentBoardTheme();
+      localStorage.setItem(STORAGE_BOARD_THEME_KEY, theme);
+      applyBoardTheme();
+    });
+  }
 
   setImportStatus('Idle');
   setAnalyzeStatus('Idle');
+  setAnalyzeErrors('', 'idle');
   setReviewMoveStatus('Ready.');
   setEngineStatus('Stockfish: idle.');
   setShowAnswerButtonState();
@@ -1914,6 +1976,29 @@ function wireImportPage() {
   const clearAllImportsBtn = $('clearAllImportsBtn');
   if (clearAllImportsBtn) {
     clearAllImportsBtn.addEventListener('click', () => openImportClearConfirm());
+  }
+  if (userCardsEl) {
+    userCardsEl.addEventListener('click', async (ev) => {
+      const targetEl = ev.target instanceof Element ? ev.target : ev.target?.parentElement;
+      const btn = targetEl?.closest?.('button[data-delete-user]');
+      if (!btn) return;
+      const username = String(btn.dataset.deleteUser || '').trim();
+      if (!username) return;
+      if (!window.confirm(`Delete profile "${username}" and all its games, analysis, cards, and reviews?`)) return;
+      setBtnBusy(btn, true, '×');
+      setImportStatus(`Deleting ${username}...`, 'busy');
+      try {
+        const out = await postJson('/api/import/clear-user', { username });
+        setImportStatus(`Deleted ${username}: ${Number(out.games_deleted || 0)} games.`, 'ok');
+        if (selectedUser() === username) localStorage.removeItem(STORAGE_USER_KEY);
+        await fetchUsers();
+      } catch (e) {
+        setImportStatus('Delete profile failed.', 'error');
+        log(`Delete profile failed: ${e.message}`);
+      } finally {
+        setBtnBusy(btn, false, '×');
+      }
+    });
   }
   const importClearConfirm = $('importClearConfirm');
   if (importClearConfirm) {
