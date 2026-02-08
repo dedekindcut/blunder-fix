@@ -29,9 +29,9 @@
           <label>Username
             <select id="userSelectStats"></select>
           </label>
-          <label>Window (days)
+          <label class="range-field">
+            <span class="range-head"><span>Window (days)</span><span class="slider-value" id="statsDaysValue">60</span></span>
             <input id="statsDays" type="range" value="60" min="7" max="365" step="1" />
-            <span class="slider-value" id="statsDaysValue">60</span>
           </label>
           <button id="statsRefresh">Refresh</button>
         </div>

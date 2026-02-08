@@ -42,6 +42,7 @@
           </label>
         </div>
         <p id="analyzeStatus" class="status">Idle</p>
+        <p id="analyzeErrors" class="status"></p>
         <p id="engineStatus" class="status">Stockfish: idle.</p>
         <div class="row analyze-actions-row">
           <button id="analyzeBtn">Analyze</button>
@@ -57,21 +58,21 @@
             <button id="analyzeSettingsClose" class="icon-btn" aria-label="Close settings" title="Close">&#10005;</button>
           </div>
           <div class="settings-grid">
-          <label>Depth
+          <label class="range-field">
+            <span class="range-head"><span>Depth</span><span class="slider-value" id="depthValue">10</span></span>
             <input id="depth" type="range" value="10" min="4" max="24" step="1" />
-            <span class="slider-value" id="depthValue">10</span>
           </label>
-          <label>Number of Lines
+          <label class="range-field">
+            <span class="range-head"><span>Number of Lines</span><span class="slider-value" id="multipvValue">4</span></span>
             <input id="multipv" type="range" value="4" min="1" max="12" step="1" />
-            <span class="slider-value" id="multipvValue">4</span>
           </label>
-          <label>Skip Opening Moves
+          <label class="range-field">
+            <span class="range-head"><span>Skip Opening Moves</span><span class="slider-value" id="openingSkipValue">8</span></span>
             <input id="openingSkip" type="range" value="8" min="0" max="40" step="1" />
-            <span class="slider-value" id="openingSkipValue">8</span>
           </label>
-          <label>Accept Window (cp)
+          <label class="range-field">
+            <span class="range-head"><span>Accept Window (cp)</span><span class="slider-value" id="cpWindowValue">30</span></span>
             <input id="cpWindow" type="range" value="30" min="0" max="300" step="5" />
-            <span class="slider-value" id="cpWindowValue">30</span>
           </label>
         </div>
         </section>

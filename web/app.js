@@ -15,6 +15,7 @@ const logEl = $('log');
 const infoEl = $('cardInfo');
 const importStatusEl = $('importStatus');
 const analyzeStatusEl = $('analyzeStatus');
+const analyzeErrorsEl = $('analyzeErrors');
 const reviewMoveStatusEl = $('reviewMoveStatus');
 const engineStatusEl = $('engineStatus');
 const boardOverlayEl = $('boardOverlay');
@@ -48,14 +49,13 @@ let moveAttemptRecorded = false;
 let usersCache = [];
 let attempts = [];
 let answerShown = false;
-let alternativesShown = false;
+let answerRevealed = false;
 let opponentReplyShapes = [];
 let replyRequestSeq = 0;
 let cardStartedAt = null;
 let wrongAttemptsThisCard = 0;
 let autoProceedTimer = null;
 let cardTimerInterval = null;
-let alternativesUnlocked = false;
 let promotionRequestSeq = 0;
 let autoNextTickTimer = null;
 let sfWorker = null;
@@ -94,6 +94,16 @@ function setPlayedMoveMetric(card) {
   attemptPlayedMoveEl.classList.add(sev.cls);
 }
 
+function setAnswerEvalMetric(cp) {
+  if (!answerEvalMetricEl) return;
+  answerEvalMetricEl.textContent = fmtEval(cp);
+  answerEvalMetricEl.classList.remove('answer-eval-pos', 'answer-eval-neg', 'answer-eval-neutral');
+  if (cp === null || cp === undefined) return;
+  if (Number(cp) < 0) answerEvalMetricEl.classList.add('answer-eval-neg');
+  else if (Number(cp) > 0) answerEvalMetricEl.classList.add('answer-eval-pos');
+  else answerEvalMetricEl.classList.add('answer-eval-neutral');
+}
+
 function log(msg) {
   if (!logEl) return;
   logEl.textContent = `${new Date().toISOString()} ${msg}\n${logEl.textContent}`;
@@ -102,6 +112,30 @@ function log(msg) {
 function fenTurn(fen) {
   const t = String(fen || '').split(' ')[1];
   return t === 'b' ? 'black' : 'white';
+}
+
+function parsePgnHeadersLocal(pgn) {
+  const h = {};
+  for (const line of String(pgn || '').split('\n')) {
+    const m = line.match(/^\[([A-Za-z0-9_]+)\s+"(.*)"\]$/);
+    if (!m) continue;
+    h[m[1]] = m[2];
+  }
+  return h;
+}
+
+function isSupportedPgnVariant(pgn) {
+  const h = parsePgnHeadersLocal(pgn);
+  const variant = String(h.Variant || '').trim().toLowerCase();
+  return !variant || variant === 'standard';
+}
+
+function moveSafe(board, moveObj) {
+  try {
+    return board.move(moveObj);
+  } catch {
+    return null;
+  }
 }
 
 function scoreToCp(score) {
@@ -361,6 +395,7 @@ function setStatus(el, msg, type = 'idle') {
 
 const setImportStatus = (msg, type = 'idle') => setStatus(importStatusEl, msg, type);
 const setAnalyzeStatus = (msg, type = 'idle') => setStatus(analyzeStatusEl, msg, type);
+const setAnalyzeErrors = (msg, type = 'idle') => setStatus(analyzeErrorsEl, msg, type);
 const setReviewMoveStatus = (msg, type = 'idle') => setStatus(reviewMoveStatusEl, msg, type);
 const setEngineStatus = (msg, type = 'idle') => setStatus(engineStatusEl, msg, type);
 
@@ -570,17 +605,6 @@ function setShowAnswerButtonState() {
     : '<i class="btn-icon bi bi-eye"></i><span>Show Answer</span>';
 }
 
-function setShowAlternativesButtonState() {
-  const btn = $('showAlternatives');
-  if (!btn) return;
-  const visible = Boolean(alternativesUnlocked);
-  btn.hidden = !visible;
-  btn.style.display = visible ? 'inline-flex' : 'none';
-  btn.innerHTML = alternativesShown
-    ? '<i class="btn-icon bi bi-signpost-split"></i><span>Hide Alternatives</span>'
-    : '<i class="btn-icon bi bi-signpost-split"></i><span>Show Alternatives</span>';
-}
-
 function formatElapsed(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   const m = Math.floor(s / 60);
@@ -703,17 +727,16 @@ function acceptableLines() {
 function alternativeShapes() {
   const lines = acceptableLines();
   if (!lines.length) return [];
-  const bestCp = Math.max(...lines.map((l) => Number(l.cp ?? -999999)));
   const seen = new Set();
   const out = [];
   for (const l of lines) {
     const u = l.first_move_uci || '';
-    if (u.length < 4 || seen.has(u)) continue;
+    if (u.length < 4 || seen.has(u) || (playedMoveUci && u === playedMoveUci)) continue;
     seen.add(u);
     out.push({
       orig: u.slice(0, 2),
       dest: u.slice(2, 4),
-      brush: Number(l.cp) === bestCp ? 'green' : 'blue',
+      brush: 'blue',
     });
   }
   return out;
@@ -722,19 +745,16 @@ function alternativeShapes() {
 function syncBoardArrows() {
   if (!cg) return;
   const shapes = [];
-  if (alternativesShown) shapes.push(...alternativeShapes());
+  if (answerRevealed) shapes.push(...alternativeShapes());
   if (opponentReplyShapes.length) shapes.push(...opponentReplyShapes);
   cg.set({ drawable: { autoShapes: shapes } });
 }
 
 function clearBoardDecorations() {
   replyRequestSeq += 1;
-  alternativesShown = false;
-  alternativesUnlocked = false;
   opponentReplyShapes = [];
   hidePromotionPicker();
   clearAutoProceedTimer();
-  setShowAlternativesButtonState();
   if (!cg) return;
   cg.set({
     lastMove: null,
@@ -780,14 +800,18 @@ function resetAttemptBox() {
   clearAutoProceedTimer();
   if (attemptCardIdEl) attemptCardIdEl.textContent = currentCard ? `#${cardHash6(currentCard.card_id)}` : '-';
   setPlayedMoveMetric(currentCard);
-  if (answerEvalMetricEl) answerEvalMetricEl.textContent = '-';
+  setAnswerEvalMetric(null);
   if (attemptListEl) attemptListEl.innerHTML = '';
   answerShown = false;
-  alternativesShown = false;
-  alternativesUnlocked = false;
+  answerRevealed = false;
   opponentReplyShapes = [];
   setShowAnswerButtonState();
-  setShowAlternativesButtonState();
+  if (cg) {
+    cg.set({
+      lastMove: null,
+      drawable: { autoShapes: [] },
+    });
+  }
 }
 
 function renderAttempts() {
@@ -1048,16 +1072,9 @@ function applyUserStatsToReviewMetrics(username) {
 }
 
 function setQueueMetricsFromStats(s) {
-  const totalDue = Number(s?.due_cards || 0);
   const newDue = Number(s?.new_due_cards || 0);
-  const apiWrong = Number.isFinite(Number(s?.learn_due_cards))
-    ? Number(s.learn_due_cards)
-    : Number.isFinite(Number(s?.wrong_due_cards))
-      ? Number(s.wrong_due_cards)
-      : null;
-  const wrongDue = apiWrong === null ? Number(sessionMetrics.wrong || 0) : apiWrong;
-  const apiReviewDue = Number.isFinite(Number(s?.review_due_cards)) ? Number(s.review_due_cards) : null;
-  const reviewDue = apiReviewDue === null ? Math.max(0, totalDue - newDue - wrongDue) : apiReviewDue;
+  const wrongDue = Number(s?.learn_due_cards ?? s?.wrong_due_cards ?? 0);
+  const reviewDue = Number(s?.review_due_cards || 0);
   if (metricQueueNewEl) metricQueueNewEl.textContent = String(Math.max(0, newDue));
   if (metricQueueWrongEl) metricQueueWrongEl.textContent = String(Math.max(0, wrongDue));
   if (metricQueueDueEl) metricQueueDueEl.textContent = String(Math.max(0, reviewDue));
@@ -1093,7 +1110,15 @@ function clearBoardOverlay() {
   if (!boardOverlayEl) return;
   if (overlayTimer) clearTimeout(overlayTimer);
   boardOverlayEl.textContent = '';
-  boardOverlayEl.classList.remove('show', 'success', 'fail');
+  boardOverlayEl.classList.remove(
+    'show',
+    'success',
+    'fail',
+    'grade-again',
+    'grade-hard',
+    'grade-good',
+    'grade-easy'
+  );
 }
 
 function clearWrongResetTimer() {
@@ -1159,6 +1184,21 @@ function showBoardOverlay(ok) {
   overlayTimer = setTimeout(clearBoardOverlay, 900);
 }
 
+function showGradeOverlay(rating) {
+  if (!boardOverlayEl) return;
+  clearBoardOverlay();
+  const map = {
+    1: { cls: 'grade-again', txt: 'Again' },
+    2: { cls: 'grade-hard', txt: 'Hard' },
+    3: { cls: 'grade-good', txt: 'Good' },
+    4: { cls: 'grade-easy', txt: 'Easy' },
+  };
+  const meta = map[Number(rating)] || { cls: 'grade-good', txt: '' };
+  boardOverlayEl.textContent = meta.txt;
+  boardOverlayEl.classList.add('show', meta.cls);
+  overlayTimer = setTimeout(clearBoardOverlay, 420);
+}
+
 function recordMoveAttempt(ok) {
   sessionMetrics.attempts += 1;
   if (ok) {
@@ -1218,10 +1258,28 @@ function setupBoard(card) {
     fen: card.fen.split(' ').slice(0, 4).join(' '),
     orientation: card.side_to_move,
     turnColor: card.side_to_move,
+    lastMove: null,
     drawable: { autoShapes: [] },
     movable: { color: card.side_to_move, dests: legalDests },
   });
   syncBoardArrows();
+}
+
+function resetToCardPosition() {
+  if (!currentCard) return;
+  clearWrongResetTimer();
+  clearBoardDecorations();
+  answerShown = false;
+  answerRevealed = false;
+  setShowAnswerButtonState();
+  setupBoard(currentCard);
+  // Extra hard reset pass after board re-render to avoid stale arrows/last-move markers.
+  if (cg) {
+    cg.set({
+      lastMove: null,
+      drawable: { autoShapes: [] },
+    });
+  }
 }
 
 async function onMove(orig, dest) {
@@ -1274,12 +1332,11 @@ async function onMove(orig, dest) {
   });
 
   if (ok) {
-    alternativesShown = false;
-    alternativesUnlocked = false;
-    setShowAlternativesButtonState();
     answerShown = true;
+    answerRevealed = false;
     setShowAnswerButtonState();
-    if (answerEvalMetricEl) answerEvalMetricEl.textContent = fmtEval(line?.cp ?? null);
+    syncBoardArrows();
+    setAnswerEvalMetric(line?.cp ?? null);
   } else {
     wrongAttemptsThisCard += 1;
   }
@@ -1314,8 +1371,8 @@ async function loadCard() {
   await ensureBoardDeps();
   clearWrongResetTimer();
   currentCard = data.card;
-  setupBoard(currentCard);
   resetAttemptBox();
+  setupBoard(currentCard);
   renderAttempts();
   setReviewMoveStatus('Your move.', 'idle');
   await refreshGradePreviewLabels();
@@ -1326,6 +1383,8 @@ async function gradeCard(rating) {
   if (!currentCard) return;
   clearWrongResetTimer();
   stopCardTimer();
+  showGradeOverlay(rating);
+  await sleep(220);
   clearBoardDecorations();
   const out = await postJson('/api/review/grade', { card_id: currentCard.card_id, rating });
   sessionMetrics.reviewed += 1;
@@ -1338,18 +1397,11 @@ async function gradeCard(rating) {
 function showAnswer() {
   if (!currentCard || !positionChess || !cg) return;
   if (answerShown) {
-    clearWrongResetTimer();
-    clearBoardDecorations();
-    setupBoard(currentCard);
-    answerShown = false;
-    alternativesUnlocked = false;
-    setShowAnswerButtonState();
-    setShowAlternativesButtonState();
+    resetToCardPosition();
     setReviewMoveStatus('Reset.', 'idle');
     return;
   }
-  clearWrongResetTimer();
-  setupBoard(currentCard);
+  resetToCardPosition();
 
   const acceptable = (currentCard.all_lines || []).filter((l) => acceptableLineSet().has(l.first_move_uci));
   const best = (acceptable && acceptable[0]) || (currentCard.all_lines && currentCard.all_lines[0]);
@@ -1376,35 +1428,16 @@ function showAnswer() {
   });
   playedMoveUci = uci;
   setReviewMoveStatus(`Answer: ${mv.san || uci}`, 'ok');
-  if (answerEvalMetricEl) answerEvalMetricEl.textContent = fmtEval(answerLine?.cp ?? best?.cp ?? null);
-  alternativesShown = false;
-  alternativesUnlocked = true;
-  setShowAlternativesButtonState();
+  setAnswerEvalMetric(answerLine?.cp ?? best?.cp ?? null);
   resetOpponentReplyArrows();
   answerShown = true;
+  answerRevealed = true;
   setShowAnswerButtonState();
+  syncBoardArrows();
   const cardId = currentCard.card_id;
   const fenAfter = positionChess.fen();
   void fetchOpponentReplyArrows(fenAfter, cardId);
   scheduleNextCardCountdown(cardId, 5, 1);
-}
-
-function showAlternatives() {
-  if (!currentCard || !cg || !alternativesUnlocked) return;
-  if (answerShown) {
-    clearWrongResetTimer();
-    setupBoard(currentCard);
-    answerShown = false;
-    setShowAnswerButtonState();
-  }
-  alternativesShown = !alternativesShown;
-  setShowAlternativesButtonState();
-  syncBoardArrows();
-  if (alternativesShown) {
-    setReviewMoveStatus(`Alt: ${alternativeShapes().length}`, 'idle');
-  } else {
-    setReviewMoveStatus('Alt off.', 'idle');
-  }
 }
 
 function wireCommon() {
@@ -1546,7 +1579,6 @@ function wireCommon() {
   setReviewMoveStatus('Ready.');
   setEngineStatus('Stockfish: idle.');
   setShowAnswerButtonState();
-  setShowAlternativesButtonState();
   updateSessionMetricsUI();
 }
 
@@ -1730,7 +1762,7 @@ function uciLineToSan(fen, pv) {
   const sans = [];
   for (const u of (pv || []).slice(0, 10)) {
     if (!u || u.length < 4) break;
-    const out = b.move(uciToMoveObj(u));
+    const out = moveSafe(b, uciToMoveObj(u));
     if (!out) break;
     sans.push(out.san);
   }
@@ -1767,7 +1799,7 @@ async function analyzeSinglePositionWasm(fen, playedUci, sideToMove, cfg) {
 
   if (playedCp === null || playedCp === undefined) {
     const b2 = new ChessCtor(fen);
-    const applied = b2.move(uciToMoveObj(playedUci));
+    const applied = moveSafe(b2, uciToMoveObj(playedUci));
     if (!applied) playedCp = Number(bestCp);
     else {
       const replyInfos = await stockfishAnalyze(b2.fen(), { depth: Math.max(6, cfg.depth - 2), multipv: 1 });
@@ -1790,6 +1822,9 @@ async function analyzeSinglePositionWasm(fen, playedUci, sideToMove, cfg) {
 
 async function analyzeGameInBrowser(game, cfg) {
   if (!ChessCtor) await ensureBoardDeps();
+  if (!isSupportedPgnVariant(game.pgn)) {
+    return { positions: [], blunders: 0, errors: 0, skipped: 'unsupported variant' };
+  }
   const pgnChess = new ChessCtor();
   try {
     pgnChess.loadPgn(game.pgn, { strict: false });
@@ -1809,12 +1844,18 @@ async function analyzeGameInBrowser(game, cfg) {
     const sideToMove = board.turn() === 'w' ? 'white' : 'black';
     const moveObj = { from: mv.from, to: mv.to, promotion: mv.promotion };
     if (sideToMove !== userSide) {
-      board.move(moveObj);
+      if (!moveSafe(board, moveObj)) {
+        errors += 1;
+        break;
+      }
       continue;
     }
     userMoveIndex += 1;
     if (userMoveIndex <= cfg.openingSkip) {
-      board.move(moveObj);
+      if (!moveSafe(board, moveObj)) {
+        errors += 1;
+        break;
+      }
       continue;
     }
 
@@ -1837,13 +1878,13 @@ async function analyzeGameInBrowser(game, cfg) {
 
     const practical = (() => {
       const bAfter = new ChessCtor(fen);
-      const userApplied = bAfter.move(moveObj);
+      const userApplied = moveSafe(bAfter, moveObj);
       if (!userApplied) return null;
       const opp = moves[i + 1];
       if (!opp) return null;
       const bResp = new ChessCtor(bAfter.fen());
       const oppMoveObj = { from: opp.from, to: opp.to, promotion: opp.promotion };
-      const oppApplied = bResp.move(oppMoveObj);
+      const oppApplied = moveSafe(bResp, oppMoveObj);
       if (!oppApplied) return null;
       return {
         opponent_move_uci: moveObjToUci(opp),
@@ -1885,7 +1926,10 @@ async function analyzeGameInBrowser(game, cfg) {
         : null,
     });
 
-    board.move(moveObj);
+    if (!moveSafe(board, moveObj)) {
+      errors += 1;
+      break;
+    }
   }
 
   return { positions, blunders, errors };
@@ -1901,6 +1945,7 @@ function wireAnalyzePage() {
       setSelectedUser(username);
       setBtnBusy(btn, true, 'Analyzing...');
       setAnalyzeStatus('Analyzing... 0 games', 'busy');
+      setAnalyzeErrors('', 'idle');
       try {
         const cfg = {
           depth: Number($('depth')?.value || 10),
@@ -1926,6 +1971,7 @@ function wireAnalyzePage() {
         let totalBlunders = 0;
         let totalErrors = 0;
         let failedGames = 0;
+        const failedDetails = [];
         for (const g of games) {
           setAnalyzeStatus(`Analyzing... ${done}/${total} games • errors ${totalErrors}`, 'busy');
           try {
@@ -1940,6 +1986,7 @@ function wireAnalyzePage() {
           } catch (e) {
             failedGames += 1;
             totalErrors += 1;
+            failedDetails.push(`#${g.id}: ${String(e?.message || 'error')}`);
             log(`Analyze game failed id=${g.id}: ${e.message}`);
           }
           done += 1;
@@ -1947,10 +1994,16 @@ function wireAnalyzePage() {
         }
         const out = { games: done, positions: totalPositions, blunders: totalBlunders, errors: totalErrors, failed_games: failedGames };
         setAnalyzeStatus(`Done: ${out.games}g ${out.positions}p ${out.blunders}b • errors ${out.errors} • failed ${out.failed_games}`, out.errors ? 'error' : 'ok');
+        if (failedDetails.length) {
+          setAnalyzeErrors(`Failed games: ${failedDetails.slice(0, 8).join(' | ')}`, 'error');
+        } else {
+          setAnalyzeErrors('', 'idle');
+        }
         await fetchUsers();
       } catch (e) {
         log(`Analyze failed: ${e.message}`);
         setAnalyzeStatus('Analyze failed.', 'error');
+        setAnalyzeErrors(String(e?.message || 'Analyze failed.'), 'error');
       } finally {
         setBtnBusy(btn, false, 'Analyzing...');
       }
@@ -1994,12 +2047,6 @@ function wireAnalyzePage() {
 function wireReviewPage() {
   const showBtn = $('showAnswer');
   if (showBtn) showBtn.addEventListener('click', showAnswer);
-  const altBtn = $('showAlternatives');
-  if (altBtn) {
-    alternativesUnlocked = false;
-    setShowAlternativesButtonState();
-    altBtn.addEventListener('click', showAlternatives);
-  }
   if (autoNextCancelEl) {
     autoNextCancelEl.addEventListener('click', () => {
       clearAutoProceedTimer();

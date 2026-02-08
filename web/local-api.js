@@ -521,14 +521,19 @@ function computeUserStats(username, severity) {
   };
 }
 
-function handleUsers(url) {
+async function handleUsers(url) {
   const severity = parseSeverityFilter(url);
   const users = [...new Set(stateCache.games.map((g) => lower(g.username)))].sort();
+  let created = 0;
+  for (const u of users) created += ensureCardsForFilter(u, severity);
+  if (created > 0) await saveState();
   return toJsonResponse({ users: users.map((u) => computeUserStats(u, severity)) });
 }
 
-function handleStats(url, username) {
+async function handleStats(url, username) {
   const severity = parseSeverityFilter(url);
+  const created = ensureCardsForFilter(username, severity);
+  if (created > 0) await saveState();
   return toJsonResponse(computeUserStats(username, severity));
 }
 
