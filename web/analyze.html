@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blunder Fix • Analyze</title>
+    <link rel="stylesheet" href="/web/styles.css" />
+  </head>
+  <body>
+    <main class="app-wrap" data-page="analyze">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">BF</span>
+          <div>
+            <h1>Analyze Games</h1>
+            <p>Step 2 of 3</p>
+          </div>
+        </div>
+        <nav class="nav-pill">
+          <a href="/import">Import</a>
+          <a class="active" href="/analyze">Analyze</a>
+          <a href="/review">Review</a>
+          <a href="/stats">Stats</a>
+        </nav>
+      </header>
+
+      <section class="glass-panel">
+        <h2>Analysis Controls</h2>
+        <div class="row wrap">
+          <label>Username
+            <select id="userSelectAnalyze"></select>
+          </label>
+          <label>Depth
+            <input id="depth" type="range" value="10" min="4" max="24" step="1" />
+            <span class="slider-value" id="depthValue">10</span>
+          </label>
+          <label>MultiPV
+            <input id="multipv" type="range" value="4" min="1" max="12" step="1" />
+            <span class="slider-value" id="multipvValue">4</span>
+          </label>
+          <label>Skip First Your Moves
+            <input id="openingSkip" type="range" value="8" min="0" max="40" step="1" />
+            <span class="slider-value" id="openingSkipValue">8</span>
+          </label>
+          <label>Accept Window (cp)
+            <input id="cpWindow" type="range" value="50" min="0" max="300" step="5" />
+            <span class="slider-value" id="cpWindowValue">50</span>
+          </label>
+          <label>Blunder Threshold (cp)
+            <input id="blunderCp" type="range" value="200" min="20" max="1000" step="10" />
+            <span class="slider-value" id="blunderCpValue">200</span>
+          </label>
+          <label>Min Eval (cp)
+            <input id="objectiveFloor" type="range" value="-200" min="-1000" max="200" step="10" />
+            <span class="slider-value" id="objectiveFloorValue">-200</span>
+          </label>
+          <label>Winning Prune (cp)
+            <input id="winningPrune" type="range" value="300" min="0" max="1000" step="10" />
+            <span class="slider-value" id="winningPruneValue">300</span>
+          </label>
+          <button id="analyzeBtn">Analyze</button>
+          <button id="resetAnalyzeBtn" class="danger-btn">Flush Analysis Cache</button>
+          <button id="refreshUsers">Refresh Profiles</button>
+        </div>
+        <p id="analyzeStatus" class="status">Idle</p>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Imported Profiles</h2>
+        <div id="userCards" class="profiles-grid"></div>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Logs</h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
+    <script type="module" src="/web/app.js"></script>
+  </body>
+</html>

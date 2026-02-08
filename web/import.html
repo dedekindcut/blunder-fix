@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blunder Fix • Import</title>
+    <link rel="stylesheet" href="/web/styles.css" />
+  </head>
+  <body>
+    <main class="app-wrap" data-page="import">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">BF</span>
+          <div>
+            <h1>Import Games</h1>
+            <p>Step 1 of 3</p>
+          </div>
+        </div>
+        <nav class="nav-pill">
+          <a class="active" href="/import">Import</a>
+          <a href="/analyze">Analyze</a>
+          <a href="/review">Review</a>
+          <a href="/stats">Stats</a>
+        </nav>
+      </header>
+
+      <section class="glass-panel">
+        <h2>Import Games</h2>
+        <div class="row wrap">
+          <label>Lichess Username <input id="lichessUser" /></label>
+          <label>Max Games <input id="lichessMax" type="number" value="100" min="1" max="2000" /></label>
+          <button id="importLichess">Import Lichess</button>
+        </div>
+        <div class="row wrap">
+          <label>Chess.com Username <input id="chesscomUser" /></label>
+          <label>Max Games <input id="chesscomMax" type="number" value="200" min="1" max="2000" /></label>
+          <button id="importChesscom">Import Chess.com</button>
+        </div>
+        <p id="importStatus" class="status">Idle</p>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Database</h2>
+        <div class="row wrap">
+          <button id="exportDbBtn">Export DB</button>
+          <input id="importDbFile" type="file" accept=".db,.sqlite,.sqlite3,application/x-sqlite3" />
+          <button id="importDbBtn" class="danger-btn">Import DB</button>
+        </div>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Imported Profiles</h2>
+        <div class="row">
+          <button id="refreshUsers">Refresh Profiles</button>
+        </div>
+        <div id="userCards" class="profiles-grid"></div>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Logs</h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
+    <script type="module" src="/web/app.js"></script>
+  </body>
+</html>

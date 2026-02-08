@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blunder Fix • Stats</title>
+    <link rel="stylesheet" href="/web/styles.css" />
+  </head>
+  <body>
+    <main class="app-wrap" data-page="stats">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">BF</span>
+          <div>
+            <h1>Learning Stats</h1>
+            <p>Step 4 of 4</p>
+          </div>
+        </div>
+        <nav class="nav-pill">
+          <a href="/import">Import</a>
+          <a href="/analyze">Analyze</a>
+          <a href="/review">Review</a>
+          <a class="active" href="/stats">Stats</a>
+        </nav>
+      </header>
+
+      <section class="glass-panel">
+        <div class="row wrap">
+          <label>Username
+            <select id="userSelectStats"></select>
+          </label>
+          <label>Window (days)
+            <input id="statsDays" type="range" value="60" min="7" max="365" step="1" />
+            <span class="slider-value" id="statsDaysValue">60</span>
+          </label>
+          <button id="statsRefresh">Refresh</button>
+        </div>
+      </section>
+
+      <section class="glass-panel">
+        <div class="review-metrics">
+          <div class="metric-card"><span class="metric-label">Total Reviews</span><span id="statsTotalReviews" class="metric-value">0</span></div>
+          <div class="metric-card"><span class="metric-label">Retention</span><span id="statsRetention" class="metric-value">0%</span></div>
+          <div class="metric-card"><span class="metric-label">Avg Interval</span><span id="statsAvgInterval" class="metric-value">0d</span></div>
+          <div class="metric-card"><span class="metric-label">Again</span><span id="statsAgain" class="metric-value">0</span></div>
+          <div class="metric-card"><span class="metric-label">Hard</span><span id="statsHard" class="metric-value">0</span></div>
+          <div class="metric-card"><span class="metric-label">Good</span><span id="statsGood" class="metric-value">0</span></div>
+          <div class="metric-card"><span class="metric-label">Easy</span><span id="statsEasy" class="metric-value">0</span></div>
+        </div>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Reviews Per Day</h2>
+        <div id="statsReviewsByDay" class="chart-list"></div>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Retention Per Day</h2>
+        <div id="statsRetentionByDay" class="chart-list"></div>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Rating Distribution</h2>
+        <div id="statsRatingDist" class="chart-list"></div>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Interval Distribution</h2>
+        <div id="statsIntervals" class="chart-list"></div>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Logs</h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
+    <script type="module" src="/web/app.js"></script>
+  </body>
+</html>

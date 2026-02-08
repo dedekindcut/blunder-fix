@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blunder Fix • Review</title>
+    <link rel="stylesheet" href="https://esm.sh/@lichess-org/chessground@10.0.2/assets/chessground.base.css" />
+    <link rel="stylesheet" href="https://esm.sh/@lichess-org/chessground@10.0.2/assets/chessground.brown.css" />
+    <link rel="stylesheet" href="https://esm.sh/@lichess-org/chessground@10.0.2/assets/chessground.cburnett.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="/web/styles.css" />
+  </head>
+  <body>
+    <main class="app-wrap" data-page="review">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">BF</span>
+          <div>
+            <h1>Review Blunders</h1>
+            <p>Step 3 of 3</p>
+          </div>
+        </div>
+        <nav class="nav-pill">
+          <a href="/import">Import</a>
+          <a href="/analyze">Analyze</a>
+          <a class="active" href="/review">Review</a>
+          <a href="/stats">Stats</a>
+        </nav>
+      </header>
+
+      <section class="glass-panel">
+        <div class="row">
+          <label>Username
+            <select id="userSelectReview"></select>
+          </label>
+          <button id="reviewSettingsBtn" class="icon-btn" aria-label="Review settings" title="Review settings">&#9881;</button>
+        </div>
+
+        <div class="review-metrics">
+          <div class="metric-card queue-card">
+            <span class="metric-label">Queue</span>
+            <div class="queue-breakdown">
+              <span class="q-new">New <strong id="metricQueueNew">0</strong></span>
+              <span class="q-wrong">Learn <strong id="metricQueueWrong">0</strong></span>
+              <span class="q-due">Due <strong id="metricQueueDue">0</strong></span>
+            </div>
+          </div>
+          <div class="metric-card"><span class="metric-label">Session Reviewed</span><span id="metricReviewed" class="metric-value">0</span></div>
+          <div class="metric-card"><span class="metric-label">Move Accuracy</span><span id="metricAccuracy" class="metric-value">0%</span></div>
+          <div class="metric-card"><span class="metric-label">Current Streak</span><span id="metricStreak" class="metric-value">0</span></div>
+          <div class="metric-card"><span class="metric-label">Best Streak</span><span id="metricBestStreak" class="metric-value">0</span></div>
+          <div class="metric-card"><span class="metric-label">Total Blunders</span><span id="metricBlunders" class="metric-value">0</span></div>
+        </div>
+
+        <div class="review-board-row">
+          <div class="board-shell">
+            <div id="board" class="board"></div>
+            <div id="boardOverlay" class="board-overlay" aria-live="polite"></div>
+            <div id="promotionPicker" class="promotion-picker" hidden>
+              <button type="button" data-piece="q">Q</button>
+              <button type="button" data-piece="r">R</button>
+              <button type="button" data-piece="b">B</button>
+              <button type="button" data-piece="n">N</button>
+            </div>
+          </div>
+          <div class="review-side-column">
+            <div class="attempt-box">
+              <div class="attempt-head">
+                <span>Card</span>
+                <strong id="attemptCardId">-</strong>
+              </div>
+              <div class="attempt-timer" id="attemptTimer">00:00</div>
+              <div class="attempt-head">
+                <span>Answer Eval</span>
+                <strong id="answerEvalMetric">-</strong>
+              </div>
+              <div class="attempt-list-wrap">
+                <span class="attempt-label">Attempts:</span>
+                <ul id="attemptList" class="attempt-list"></ul>
+              </div>
+            </div>
+            <div class="review-side-actions">
+              <button id="showAnswer"><i class="btn-icon bi bi-eye"></i><span>Show Answer</span></button>
+              <button id="showAlternatives" hidden><i class="btn-icon bi bi-signpost-split"></i><span>Show Alternatives</span></button>
+              <button id="openLichessAnalysis"><i class="btn-icon bi bi-box-arrow-up-right"></i><span>Open in Lichess Analysis</span></button>
+            </div>
+            <p id="engineStatus" class="status">Stockfish: idle.</p>
+            <div id="autoNextWrap" class="auto-next" hidden>
+              <span id="autoNextText">Next card in 5..4..3..2</span>
+              <button id="autoNextCancel" type="button" class="danger-btn"><i class="btn-icon bi bi-x-circle"></i><span>Cancel</span></button>
+            </div>
+            <p id="reviewMoveStatus" class="status">Your move.</p>
+          </div>
+        </div>
+
+        <div class="row" id="answerRow">
+          <button data-grade="1" class="grade again">Again</button>
+          <button data-grade="2" class="grade hard">Hard</button>
+          <button data-grade="3" class="grade good">Good</button>
+          <button data-grade="4" class="grade easy">Easy</button>
+        </div>
+      </section>
+
+      <div id="reviewSettingsOverlay" class="settings-overlay" hidden>
+        <div id="reviewSettingsBackdrop" class="settings-backdrop"></div>
+        <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="reviewSettingsTitle">
+          <div class="settings-head">
+            <h2 id="reviewSettingsTitle">Review Settings</h2>
+            <button id="reviewSettingsClose" class="icon-btn" aria-label="Close settings" title="Close">&#10005;</button>
+          </div>
+          <div class="settings-grid">
+            <label class="checkbox-label">Auto-Grade
+              <input id="autoGradeMode" type="checkbox" />
+            </label>
+            <label>Blunder Threshold (cp)
+              <input id="reviewThreshold" type="range" value="200" min="20" max="1000" step="10" />
+              <span class="slider-value" id="reviewThresholdValue">200</span>
+            </label>
+            <label>Min Eval (cp)
+              <input id="reviewObjectiveFloor" type="range" value="-200" min="-1000" max="200" step="10" />
+              <span class="slider-value" id="reviewObjectiveFloorValue">-200</span>
+            </label>
+            <label>Accept Move Window (cp)
+              <input id="reviewAcceptWindow" type="range" value="50" min="0" max="300" step="5" />
+              <span class="slider-value" id="reviewAcceptWindowValue">50</span>
+            </label>
+            <label>Winning Prune (cp)
+              <input id="reviewWinningPrune" type="range" value="300" min="0" max="1000" step="10" />
+              <span class="slider-value" id="reviewWinningPruneValue">300</span>
+            </label>
+          </div>
+        </section>
+      </div>
+
+      <section class="glass-panel">
+        <h2>Imported Profiles</h2>
+        <div id="userCards" class="profiles-grid"></div>
+      </section>
+
+      <section class="glass-panel">
+        <h2>Logs</h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
+    <script type="module" src="/web/app.js"></script>
+  </body>
+</html>

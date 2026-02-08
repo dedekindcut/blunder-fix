@@ -1,0 +1,1845 @@
+let ChessgroundCtor = null;
+let ChessCtor = null;
+
+const $ = (id) => document.getElementById(id);
+const STORAGE_USER_KEY = 'bf:selectedUser';
+const STORAGE_AUTO_GRADE_KEY = 'bf:autoGradeMode';
+const STORAGE_SESSION_PREFIX = 'bf:session:';
+
+const logEl = $('log');
+const infoEl = $('cardInfo');
+const importStatusEl = $('importStatus');
+const analyzeStatusEl = $('analyzeStatus');
+const reviewMoveStatusEl = $('reviewMoveStatus');
+const engineStatusEl = $('engineStatus');
+const boardOverlayEl = $('boardOverlay');
+const userCardsEl = $('userCards');
+
+const metricReviewedEl = $('metricReviewed');
+const metricAccuracyEl = $('metricAccuracy');
+const metricStreakEl = $('metricStreak');
+const metricBestStreakEl = $('metricBestStreak');
+const metricBlundersEl = $('metricBlunders');
+const metricQueueDueEl = $('metricQueueDue');
+const metricQueueWrongEl = $('metricQueueWrong');
+const metricQueueNewEl = $('metricQueueNew');
+const attemptCardIdEl = $('attemptCardId');
+const attemptTimerEl = $('attemptTimer');
+const attemptListEl = $('attemptList');
+const answerEvalMetricEl = $('answerEvalMetric');
+const promotionPickerEl = $('promotionPicker');
+const autoNextWrapEl = $('autoNextWrap');
+const autoNextTextEl = $('autoNextText');
+const autoNextCancelEl = $('autoNextCancel');
+
+let cg = null;
+let currentCard = null;
+let positionChess = null;
+let playedMoveUci = null;
+let overlayTimer = null;
+let wrongResetTimer = null;
+let moveAttemptRecorded = false;
+let usersCache = [];
+let attempts = [];
+let answerShown = false;
+let alternativesShown = false;
+let opponentReplyShapes = [];
+let replyRequestSeq = 0;
+let cardStartedAt = null;
+let wrongAttemptsThisCard = 0;
+let autoProceedTimer = null;
+let cardTimerInterval = null;
+let alternativesUnlocked = false;
+let promotionRequestSeq = 0;
+let autoNextTickTimer = null;
+let sfWorker = null;
+let sfInitPromise = null;
+let sfQueue = Promise.resolve();
+let sfInitState = 'idle';
+let sfInitError = null;
+const SF_WORKER_CANDIDATES = [
+  '/web/vendor/stockfish/stockfish.js',
+  'https://cdn.jsdelivr.net/npm/stockfish@17.1.0/src/stockfish-17.1-lite-single-03e3232.js',
+  'https://unpkg.com/stockfish@17.1.0/src/stockfish-17.1-lite-single-03e3232.js',
+];
+
+const sessionMetrics = { reviewed: 0, attempts: 0, correct: 0, wrong: 0, streak: 0, bestStreak: 0 };
+const gradeBaseLabels = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
+
+function log(msg) {
+  if (!logEl) return;
+  logEl.textContent = `${new Date().toISOString()} ${msg}\n${logEl.textContent}`;
+}
+
+function fenTurn(fen) {
+  const t = String(fen || '').split(' ')[1];
+  return t === 'b' ? 'black' : 'white';
+}
+
+function scoreToCp(score) {
+  if (!score) return null;
+  if (score.kind === 'cp') return Number(score.value);
+  if (score.kind === 'mate') return Number(score.value) > 0 ? 100000 : -100000;
+  return null;
+}
+
+function scoreForPov(cpFromTurn, turnSide, povSide) {
+  if (cpFromTurn === null || cpFromTurn === undefined) return null;
+  if (!povSide || povSide === turnSide) return cpFromTurn;
+  return -cpFromTurn;
+}
+
+function parseInfoLine(line) {
+  if (!line.startsWith('info ')) return null;
+  const pvMatch = line.match(/\spv\s+(.+)$/);
+  if (!pvMatch) return null;
+  const mpMatch = line.match(/\smultipv\s+(\d+)/);
+  const cpMatch = line.match(/\sscore\s+cp\s+(-?\d+)/);
+  const mateMatch = line.match(/\sscore\s+mate\s+(-?\d+)/);
+  const multipv = Number(mpMatch?.[1] || 1);
+  let score = null;
+  if (cpMatch) score = { kind: 'cp', value: Number(cpMatch[1]) };
+  else if (mateMatch) score = { kind: 'mate', value: Number(mateMatch[1]) };
+  if (!score) return null;
+  const pv = pvMatch[1].trim().split(/\s+/).filter(Boolean);
+  if (!pv.length) return null;
+  return { multipv, score, pv };
+}
+
+function bootStockfishWorker(url, workerType = 'module') {
+  return new Promise((resolve, reject) => {
+    let worker = null;
+    try {
+      worker = new Worker(url, { type: workerType });
+    } catch (e) {
+      reject(e);
+      return;
+    }
+
+    let stage = 0;
+    const timeout = setTimeout(() => {
+      cleanup();
+      worker?.terminate();
+      reject(new Error(`worker init timeout (${workerType}): ${url}`));
+    }, 15000);
+
+    const onMsg = (ev) => {
+      const line = String(ev.data || '');
+      if (stage === 0 && line.includes('uciok')) {
+        stage = 1;
+        worker?.postMessage('isready');
+        return;
+      }
+      if (stage === 1 && line.includes('readyok')) {
+        cleanup();
+        resolve(worker);
+      }
+    };
+
+    const onErr = (ev) => {
+      cleanup();
+      worker?.terminate();
+      reject(new Error(`worker init error (${workerType}): ${url} ${ev?.message || ''}`.trim()));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      worker?.removeEventListener('message', onMsg);
+      worker?.removeEventListener('error', onErr);
+    };
+
+    worker.addEventListener('message', onMsg);
+    worker.addEventListener('error', onErr);
+    worker.postMessage('uci');
+  });
+}
+
+async function resolveStockfishCandidates() {
+  return SF_WORKER_CANDIDATES;
+}
+
+function ensureStockfishWorker() {
+  if (sfInitState === 'ready' && sfInitPromise) return sfInitPromise;
+  if (sfInitState === 'failed') return Promise.reject(sfInitError || new Error('Stockfish init failed'));
+  if (sfInitPromise) return sfInitPromise;
+  sfInitState = 'loading';
+  sfInitError = null;
+  setEngineStatus('Stockfish: loading...', 'busy');
+  sfInitPromise = (async () => {
+    let lastErr = null;
+    const candidates = await resolveStockfishCandidates();
+    for (const url of candidates) {
+      for (const workerType of ['module', 'classic']) {
+        try {
+          const worker = await bootStockfishWorker(url, workerType);
+          sfWorker = worker;
+          sfInitState = 'ready';
+          setEngineStatus('Stockfish: ready.', 'ok');
+          log(`Stockfish ready (${workerType}): ${url}`);
+          return;
+        } catch (e) {
+          lastErr = e;
+          log(`Stockfish candidate failed (${workerType}): ${url}`);
+        }
+      }
+    }
+    sfInitState = 'failed';
+    sfInitError = lastErr || new Error('No Stockfish worker available');
+    sfInitPromise = Promise.reject(sfInitError);
+    sfInitPromise.catch(() => {});
+    sfWorker = null;
+    setEngineStatus('Stockfish: failed.', 'error');
+    throw sfInitError;
+  })();
+  return sfInitPromise;
+}
+
+function stockfishAnalyze(fen, { depth = 12, multipv = 1 } = {}) {
+  sfQueue = sfQueue.catch(() => {}).then(async () => {
+    await ensureStockfishWorker();
+    return await new Promise((resolve, reject) => {
+      const infos = new Map();
+      const timeout = setTimeout(() => {
+        cleanup();
+        try {
+          sfWorker?.postMessage('stop');
+        } catch {}
+        reject(new Error('Stockfish timeout'));
+      }, 20000);
+
+      const onMsg = (ev) => {
+        const line = String(ev.data || '');
+        if (line.startsWith('bestmove')) {
+          cleanup();
+          const out = Array.from(infos.values()).sort((a, b) => a.multipv - b.multipv);
+          resolve(out);
+          return;
+        }
+        const p = parseInfoLine(line);
+        if (!p) return;
+        infos.set(p.multipv, p);
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        sfWorker?.removeEventListener('message', onMsg);
+      };
+
+      sfWorker?.addEventListener('message', onMsg);
+      sfWorker?.postMessage('stop');
+      sfWorker?.postMessage('ucinewgame');
+      sfWorker?.postMessage('setoption name MultiPV value ' + Math.max(1, Number(multipv || 1)));
+      sfWorker?.postMessage('position fen ' + fen);
+      sfWorker?.postMessage('go depth ' + Math.max(4, Number(depth || 12)));
+    });
+  });
+  return sfQueue;
+}
+
+async function evaluateFenCpWasm(fen, { depth = 15, povSide = null } = {}) {
+  const lines = await stockfishAnalyze(fen, { depth, multipv: 1 });
+  const first = lines[0];
+  if (!first) return null;
+  const cpFromTurn = scoreToCp(first.score);
+  return scoreForPov(cpFromTurn, fenTurn(fen), povSide);
+}
+
+async function evaluateFenLinesWasm(fen, { depth = 12, multipv = 4, cpWindow = 30, povSide = null } = {}) {
+  const infos = await stockfishAnalyze(fen, { depth, multipv });
+  if (!infos.length) return [];
+  const turn = fenTurn(fen);
+  const lines = infos
+    .map((x) => {
+      const cpFromTurn = scoreToCp(x.score);
+      const cp = scoreForPov(cpFromTurn, turn, povSide);
+      return {
+        rank: x.multipv,
+        cp,
+        first_move_uci: x.pv[0],
+      };
+    })
+    .filter((x) => x.first_move_uci && x.cp !== null && x.cp !== undefined)
+    .sort((a, b) => a.rank - b.rank);
+  if (!lines.length) return [];
+  const bestCp = Number(lines[0].cp);
+  return lines.filter((l) => (bestCp - Number(l.cp)) <= Number(cpWindow || 30));
+}
+
+async function evaluateFenCp(fen, { depth = 15, povSide = null } = {}) {
+  try {
+    return await evaluateFenCpWasm(fen, { depth, povSide });
+  } catch (e) {
+    log(`WASM eval failed, fallback API: ${e.message}`);
+    setEngineStatus('Stockfish: API fallback.', 'busy');
+    try {
+      const out = await postJson('/api/eval', { fen, depth, pov_side: povSide });
+      setEngineStatus('Stockfish: API fallback.', 'ok');
+      return Number(out?.cp);
+    } catch (apiErr) {
+      setEngineStatus('Stockfish: failed.', 'error');
+      throw apiErr;
+    }
+  }
+}
+
+async function evaluateFenLines(fen, { depth = 12, multipv = 4, cpWindow = 30, povSide = null } = {}) {
+  try {
+    return await evaluateFenLinesWasm(fen, { depth, multipv, cpWindow, povSide });
+  } catch (e) {
+    log(`WASM lines failed, fallback API: ${e.message}`);
+    setEngineStatus('Stockfish: API fallback.', 'busy');
+    try {
+      const out = await postJson('/api/reply-lines', {
+        fen,
+        depth,
+        multipv,
+        cp_window: cpWindow,
+        pov_side: povSide,
+      });
+      setEngineStatus('Stockfish: API fallback.', 'ok');
+      return Array.isArray(out?.lines) ? out.lines : [];
+    } catch (apiErr) {
+      setEngineStatus('Stockfish: failed.', 'error');
+      throw apiErr;
+    }
+  }
+}
+
+function setStatus(el, msg, type = 'idle') {
+  if (!el) return;
+  el.textContent = msg;
+  el.dataset.type = type;
+}
+
+const setImportStatus = (msg, type = 'idle') => setStatus(importStatusEl, msg, type);
+const setAnalyzeStatus = (msg, type = 'idle') => setStatus(analyzeStatusEl, msg, type);
+const setReviewMoveStatus = (msg, type = 'idle') => setStatus(reviewMoveStatusEl, msg, type);
+const setEngineStatus = (msg, type = 'idle') => setStatus(engineStatusEl, msg, type);
+
+function setBtnBusy(btn, busy, textWhenBusy) {
+  if (!btn) return;
+  if (busy) {
+    btn.dataset.originalText = btn.textContent;
+    btn.textContent = textWhenBusy;
+    btn.disabled = true;
+  } else {
+    btn.textContent = btn.dataset.originalText || btn.textContent;
+    btn.disabled = false;
+  }
+}
+
+function selectedUser() {
+  return localStorage.getItem(STORAGE_USER_KEY) || '';
+}
+
+function setSelectedUser(username) {
+  if (!username) return;
+  localStorage.setItem(STORAGE_USER_KEY, username);
+  for (const id of ['userSelectAnalyze', 'userSelectReview', 'userSelectStats']) {
+    const s = $(id);
+    if (s) s.value = username;
+  }
+}
+
+function metricsStorageKey(username) {
+  return `${STORAGE_SESSION_PREFIX}${String(username || '').toLowerCase()}`;
+}
+
+function loadSessionMetricsForUser(username) {
+  const zero = { reviewed: 0, attempts: 0, correct: 0, wrong: 0, streak: 0, bestStreak: 0 };
+  if (!username) {
+    Object.assign(sessionMetrics, zero);
+    updateSessionMetricsUI();
+    return;
+  }
+  try {
+    const raw = localStorage.getItem(metricsStorageKey(username));
+    const parsed = raw ? JSON.parse(raw) : null;
+    Object.assign(sessionMetrics, {
+      reviewed: Number(parsed?.reviewed || 0),
+      attempts: Number(parsed?.attempts || 0),
+      correct: Number(parsed?.correct || 0),
+      wrong: Number(parsed?.wrong || 0),
+      streak: Number(parsed?.streak || 0),
+      bestStreak: Number(parsed?.bestStreak || 0),
+    });
+  } catch {
+    Object.assign(sessionMetrics, zero);
+  }
+  updateSessionMetricsUI();
+}
+
+function saveSessionMetrics() {
+  const username = $('userSelectReview')?.value || selectedUser();
+  if (!username) return;
+  const payload = {
+    reviewed: Number(sessionMetrics.reviewed || 0),
+    attempts: Number(sessionMetrics.attempts || 0),
+    correct: Number(sessionMetrics.correct || 0),
+    wrong: Number(sessionMetrics.wrong || 0),
+    streak: Number(sessionMetrics.streak || 0),
+    bestStreak: Number(sessionMetrics.bestStreak || 0),
+  };
+  localStorage.setItem(metricsStorageKey(username), JSON.stringify(payload));
+}
+
+function isAutoGradeEnabled() {
+  return Boolean($('autoGradeMode')?.checked);
+}
+
+function clearAutoProceedTimer() {
+  if (autoProceedTimer) {
+    clearTimeout(autoProceedTimer);
+    autoProceedTimer = null;
+  }
+  if (autoNextTickTimer) {
+    clearInterval(autoNextTickTimer);
+    autoNextTickTimer = null;
+  }
+  if (autoNextWrapEl) autoNextWrapEl.hidden = true;
+}
+
+function fmtEval(cp) {
+  if (cp === null || cp === undefined) return '-';
+  if (Math.abs(cp) >= 90000) return cp > 0 ? 'M+' : 'M-';
+  const v = cp / 100;
+  return `${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
+}
+
+function cardHash6(cardId) {
+  const n = Number(cardId || 0) >>> 0;
+  let x = (n * 1664525 + 1013904223) >>> 0;
+  x ^= x >>> 15;
+  return x.toString(36).toUpperCase().padStart(6, '0').slice(-6);
+}
+
+function findLineByUci(uci) {
+  return (currentCard?.all_lines || []).find((l) => l.first_move_uci === uci);
+}
+
+function currentAcceptWindow() {
+  const reviewW = $('reviewAcceptWindow');
+  if (reviewW) return Number(reviewW.value || 50);
+  return Number($('cpWindow')?.value || 50);
+}
+
+function acceptableLineSet() {
+  if (!currentCard?.all_lines?.length) return new Set();
+  const w = currentAcceptWindow();
+  const bestCp = currentCard.best_cp ?? currentCard.all_lines[0].cp;
+  const s = new Set();
+  for (const l of currentCard.all_lines) {
+    if ((bestCp - l.cp) <= w) s.add(l.first_move_uci);
+  }
+  return s;
+}
+
+function setShowAnswerButtonState() {
+  const btn = $('showAnswer');
+  if (!btn) return;
+  btn.innerHTML = answerShown
+    ? '<i class="btn-icon bi bi-arrow-repeat"></i><span>Reset</span>'
+    : '<i class="btn-icon bi bi-eye"></i><span>Show Answer</span>';
+}
+
+function setShowAlternativesButtonState() {
+  const btn = $('showAlternatives');
+  if (!btn) return;
+  const visible = Boolean(alternativesUnlocked);
+  btn.hidden = !visible;
+  btn.style.display = visible ? 'inline-flex' : 'none';
+  btn.innerHTML = alternativesShown
+    ? '<i class="btn-icon bi bi-signpost-split"></i><span>Hide Alternatives</span>'
+    : '<i class="btn-icon bi bi-signpost-split"></i><span>Show Alternatives</span>';
+}
+
+function formatElapsed(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+}
+
+function stopCardTimer() {
+  if (cardTimerInterval) {
+    clearInterval(cardTimerInterval);
+    cardTimerInterval = null;
+  }
+}
+
+function tickCardTimer() {
+  if (!attemptTimerEl) return;
+  if (!cardStartedAt) {
+    attemptTimerEl.textContent = '00:00';
+    return;
+  }
+  const elapsed = (Date.now() - cardStartedAt) / 1000;
+  attemptTimerEl.textContent = formatElapsed(elapsed);
+}
+
+function startCardTimer() {
+  stopCardTimer();
+  tickCardTimer();
+  cardTimerInterval = setInterval(tickCardTimer, 1000);
+}
+
+function hidePromotionPicker() {
+  promotionRequestSeq += 1;
+  if (promotionPickerEl) promotionPickerEl.hidden = true;
+}
+
+function promotionChoices(orig, dest) {
+  if (!positionChess) return [];
+  const promos = new Set();
+  for (const m of positionChess.moves({ verbose: true })) {
+    if (m.from === orig && m.to === dest && m.promotion) promos.add(m.promotion);
+  }
+  return Array.from(promos);
+}
+
+function choosePromotionPiece(pieces) {
+  if (!promotionPickerEl || !pieces.length) return Promise.resolve(null);
+  const seq = ++promotionRequestSeq;
+  promotionPickerEl.hidden = false;
+  const buttons = Array.from(promotionPickerEl.querySelectorAll('button[data-piece]'));
+  for (const b of buttons) b.hidden = !pieces.includes(b.dataset.piece);
+
+  return new Promise((resolve) => {
+    const onClick = (ev) => {
+      if (seq !== promotionRequestSeq) return;
+      const piece = ev.currentTarget?.dataset?.piece || null;
+      cleanup();
+      resolve(piece);
+    };
+    const cleanup = () => {
+      for (const b of buttons) b.removeEventListener('click', onClick);
+      if (seq === promotionRequestSeq) promotionPickerEl.hidden = true;
+    };
+    for (const b of buttons) b.addEventListener('click', onClick);
+  });
+}
+
+function openReviewSettings() {
+  const o = $('reviewSettingsOverlay');
+  if (!o) return;
+  o.hidden = false;
+}
+
+function closeReviewSettings() {
+  const o = $('reviewSettingsOverlay');
+  if (!o) return;
+  o.hidden = true;
+}
+
+function acceptableLines() {
+  const allowed = acceptableLineSet();
+  return (currentCard?.all_lines || []).filter((l) => allowed.has(l.first_move_uci));
+}
+
+function alternativeShapes() {
+  const lines = acceptableLines();
+  if (!lines.length) return [];
+  const bestCp = Math.max(...lines.map((l) => Number(l.cp ?? -999999)));
+  const seen = new Set();
+  const out = [];
+  for (const l of lines) {
+    const u = l.first_move_uci || '';
+    if (u.length < 4 || seen.has(u)) continue;
+    seen.add(u);
+    out.push({
+      orig: u.slice(0, 2),
+      dest: u.slice(2, 4),
+      brush: Number(l.cp) === bestCp ? 'green' : 'blue',
+    });
+  }
+  return out;
+}
+
+function syncBoardArrows() {
+  if (!cg) return;
+  const shapes = [];
+  if (alternativesShown) shapes.push(...alternativeShapes());
+  if (opponentReplyShapes.length) shapes.push(...opponentReplyShapes);
+  cg.set({ drawable: { autoShapes: shapes } });
+}
+
+function clearBoardDecorations() {
+  replyRequestSeq += 1;
+  alternativesShown = false;
+  alternativesUnlocked = false;
+  opponentReplyShapes = [];
+  hidePromotionPicker();
+  clearAutoProceedTimer();
+  setShowAlternativesButtonState();
+  if (!cg) return;
+  cg.set({
+    lastMove: null,
+    drawable: { autoShapes: [] },
+  });
+}
+
+function resetOpponentReplyArrows() {
+  opponentReplyShapes = [];
+  syncBoardArrows();
+}
+
+async function fetchOpponentReplyArrows(fen, cardId) {
+  const seq = ++replyRequestSeq;
+  try {
+    const lines = await evaluateFenLines(fen, { depth: 12, multipv: 4, cpWindow: 30 });
+    if (seq !== replyRequestSeq) return false;
+    if (!currentCard || currentCard.card_id !== cardId) return false;
+    opponentReplyShapes = lines
+      .map((l, idx) => {
+        const u = l.first_move_uci || '';
+        if (u.length < 4) return null;
+        return {
+          orig: u.slice(0, 2),
+          dest: u.slice(2, 4),
+          brush: idx === 0 ? 'red' : 'yellow',
+        };
+      })
+      .filter(Boolean);
+    syncBoardArrows();
+    return true;
+  } catch (e) {
+    log(`Replies failed: ${e.message}`);
+    return false;
+  }
+}
+
+function resetAttemptBox() {
+  attempts = [];
+  wrongAttemptsThisCard = 0;
+  cardStartedAt = Date.now();
+  startCardTimer();
+  clearAutoProceedTimer();
+  if (attemptCardIdEl) attemptCardIdEl.textContent = currentCard ? `#${cardHash6(currentCard.card_id)}` : '-';
+  if (answerEvalMetricEl) answerEvalMetricEl.textContent = '-';
+  if (attemptListEl) attemptListEl.innerHTML = '';
+  answerShown = false;
+  alternativesShown = false;
+  alternativesUnlocked = false;
+  opponentReplyShapes = [];
+  setShowAnswerButtonState();
+  setShowAlternativesButtonState();
+}
+
+function renderAttempts() {
+  if (!attemptListEl) return;
+  if (!attempts.length) {
+    attemptListEl.innerHTML = '<li><span class=\"attempt-move\">-</span><span class=\"attempt-eval\">-</span></li>';
+    return;
+  }
+  attemptListEl.innerHTML = attempts
+    .map((a, i) => {
+      const cls =
+        a.evalCp === null || a.evalCp === undefined
+          ? 'attempt-eval'
+          : a.evalCp < 0
+            ? 'attempt-eval attempt-eval-neg'
+            : a.evalCp > 0
+              ? 'attempt-eval attempt-eval-pos'
+              : 'attempt-eval attempt-eval-neutral';
+      return `<li><span class=\"attempt-move\">${i + 1}. ${a.san}</span><span class=\"${cls}\">${fmtEval(a.evalCp)}</span></li>`;
+    })
+    .join('');
+}
+
+function activeUsername() {
+  return (
+    $('userSelectReview')?.value ||
+    $('userSelectAnalyze')?.value ||
+    $('reviewUser')?.value?.trim() ||
+    $('analyzeUser')?.value?.trim() ||
+    selectedUser()
+  );
+}
+
+function currentThreshold() {
+  const reviewT = Number($('reviewThreshold')?.value || 0);
+  if (reviewT) return reviewT;
+  return Number($('blunderCp')?.value || 200);
+}
+
+function currentObjectiveFloor() {
+  const reviewFloor = $('reviewObjectiveFloor');
+  if (reviewFloor) return Number(reviewFloor.value || -200);
+  const analyzeFloor = $('objectiveFloor');
+  if (analyzeFloor) return Number(analyzeFloor.value || -200);
+  return -200;
+}
+
+function currentWinningPrune() {
+  const reviewWin = $('reviewWinningPrune');
+  if (reviewWin) return Number(reviewWin.value || 300);
+  const analyzeWin = $('winningPrune');
+  if (analyzeWin) return Number(analyzeWin.value || 300);
+  return 300;
+}
+
+function percent(correct, total) {
+  return total ? `${Math.round((correct / total) * 100)}%` : '0%';
+}
+
+function updateSessionMetricsUI() {
+  if (metricReviewedEl) metricReviewedEl.textContent = String(sessionMetrics.reviewed);
+  if (metricAccuracyEl) metricAccuracyEl.textContent = percent(sessionMetrics.correct, sessionMetrics.attempts);
+  if (metricStreakEl) metricStreakEl.textContent = String(sessionMetrics.streak);
+  if (metricBestStreakEl) metricBestStreakEl.textContent = String(sessionMetrics.bestStreak);
+  saveSessionMetrics();
+}
+
+function formatDueDelta(targetTs) {
+  const due = new Date(targetTs.replace(' ', 'T') + 'Z');
+  const now = new Date();
+  const sec = Math.max(0, Math.round((due.getTime() - now.getTime()) / 1000));
+  if (sec < 60) return '<1m';
+  const mins = Math.round(sec / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days}d`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `${months}mo`;
+  const years = Math.round(months / 12);
+  return `${years}y`;
+}
+
+function setGradeButtonsDefault() {
+  for (const btn of document.querySelectorAll('.grade')) {
+    const rating = Number(btn.dataset.grade || 0);
+    btn.textContent = gradeBaseLabels[rating] || btn.textContent;
+  }
+}
+
+async function refreshGradePreviewLabels() {
+  if (!currentCard?.card_id) {
+    setGradeButtonsDefault();
+    return;
+  }
+  try {
+    const res = await fetch(`/api/review/preview/${currentCard.card_id}`);
+    if (!res.ok) throw new Error(`preview ${res.status}`);
+    const data = await res.json();
+    const byRating = data?.due_by_rating || {};
+    for (const btn of document.querySelectorAll('.grade')) {
+      const rating = Number(btn.dataset.grade || 0);
+      const base = gradeBaseLabels[rating] || btn.textContent;
+      const due = byRating[String(rating)];
+      btn.textContent = due ? `${base} (${formatDueDelta(due)})` : base;
+    }
+  } catch (e) {
+    log(`Preview failed: ${e.message}`);
+    setGradeButtonsDefault();
+  }
+}
+
+function renderBarChartRows(containerEl, rows, { okBars = false } = {}) {
+  if (!containerEl) return;
+  if (!rows.length) {
+    containerEl.innerHTML = '<p class="status">No data yet.</p>';
+    return;
+  }
+  const max = Math.max(...rows.map((r) => Number(r.value || 0)), 1);
+  containerEl.innerHTML = rows
+    .map((r) => {
+      const pct = Math.max(4, Math.round((Number(r.value || 0) / max) * 100));
+      return `
+        <div class="chart-row">
+          <span class="chart-label">${r.label}</span>
+          <span class="chart-track"><span class="chart-bar${okBars ? ' ok' : ''}" style="width:${pct}%"></span></span>
+          <span class="chart-value">${r.valueText ?? String(r.value ?? 0)}</span>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+async function loadStatsPage() {
+  const sel = $('userSelectStats');
+  const username = sel?.value || selectedUser();
+  if (!username) return;
+  const days = Number($('statsDays')?.value || 60);
+  const res = await fetch(`/api/stats/anki/${encodeURIComponent(username)}?days=${encodeURIComponent(String(days))}`);
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const s = data.summary || {};
+
+  const setTxt = (id, v) => {
+    const el = $(id);
+    if (el) el.textContent = String(v);
+  };
+  setTxt('statsTotalReviews', s.total_reviews ?? 0);
+  setTxt('statsRetention', `${Number(s.retention_pct ?? 0).toFixed(1)}%`);
+  setTxt('statsAvgInterval', `${Number(s.avg_interval_days ?? 0).toFixed(1)}d`);
+  setTxt('statsAgain', s.again ?? 0);
+  setTxt('statsHard', s.hard ?? 0);
+  setTxt('statsGood', s.good ?? 0);
+  setTxt('statsEasy', s.easy ?? 0);
+
+  const byDay = data.by_day || [];
+  renderBarChartRows(
+    $('statsReviewsByDay'),
+    byDay.map((r) => ({ label: r.day?.slice(5) || '-', value: Number(r.reviews || 0) }))
+  );
+  renderBarChartRows(
+    $('statsRetentionByDay'),
+    byDay.map((r) => ({ label: r.day?.slice(5) || '-', value: Number(r.retention_pct || 0), valueText: `${Number(r.retention_pct || 0).toFixed(1)}%` })),
+    { okBars: true }
+  );
+  renderBarChartRows($('statsRatingDist'), [
+    { label: 'Again', value: Number(s.again || 0) },
+    { label: 'Hard', value: Number(s.hard || 0) },
+    { label: 'Good', value: Number(s.good || 0) },
+    { label: 'Easy', value: Number(s.easy || 0) },
+  ]);
+  const b = data.interval_buckets || {};
+  renderBarChartRows($('statsIntervals'), [
+    { label: '<1d', value: Number(b['<1d'] || 0) },
+    { label: '1-3d', value: Number(b['1-3d'] || 0) },
+    { label: '4-7d', value: Number(b['4-7d'] || 0) },
+    { label: '8-30d', value: Number(b['8-30d'] || 0) },
+    { label: '31d+', value: Number(b['31d+'] || 0) },
+  ]);
+}
+
+function renderUserCards(users) {
+  if (!userCardsEl) return;
+  if (!users.length) {
+    userCardsEl.innerHTML = '<p class="status">No imported users yet.</p>';
+    return;
+  }
+
+  userCardsEl.innerHTML = users
+    .map(
+      (u) => `
+      <article class="profile-card">
+        <h3 class="profile-name">${u.username}:</h3>
+        <div class="profile-stats">games ${u.games} • positions ${u.positions} • blunders ${u.blunders} • due ${u.due_cards}</div>
+      </article>
+    `
+    )
+    .join('');
+}
+
+function populateSelect(select, users) {
+  if (!select) return;
+  const prev = select.value || selectedUser();
+  select.innerHTML = '<option value="">Select user</option>';
+  for (const u of users) {
+    const opt = document.createElement('option');
+    opt.value = u.username;
+    opt.textContent = u.username;
+    select.appendChild(opt);
+  }
+  if (prev && users.some((u) => u.username === prev)) {
+    select.value = prev;
+  } else if (users.length) {
+    select.value = users[0].username;
+  }
+  if (select.value) setSelectedUser(select.value);
+}
+
+function applyUserStatsToReviewMetrics(username) {
+  const u = usersCache.find((x) => x.username === username);
+  if (!u) return;
+  if (metricBlundersEl) metricBlundersEl.textContent = String(u.blunders);
+}
+
+function setQueueMetricsFromStats(s) {
+  const totalDue = Number(s?.due_cards || 0);
+  const newDue = Number(s?.new_due_cards || 0);
+  const apiWrong = Number.isFinite(Number(s?.learn_due_cards))
+    ? Number(s.learn_due_cards)
+    : Number.isFinite(Number(s?.wrong_due_cards))
+      ? Number(s.wrong_due_cards)
+      : null;
+  const wrongDue = apiWrong === null ? Number(sessionMetrics.wrong || 0) : apiWrong;
+  const apiReviewDue = Number.isFinite(Number(s?.review_due_cards)) ? Number(s.review_due_cards) : null;
+  const reviewDue = apiReviewDue === null ? Math.max(0, totalDue - newDue - wrongDue) : apiReviewDue;
+  if (metricQueueNewEl) metricQueueNewEl.textContent = String(Math.max(0, newDue));
+  if (metricQueueWrongEl) metricQueueWrongEl.textContent = String(Math.max(0, wrongDue));
+  if (metricQueueDueEl) metricQueueDueEl.textContent = String(Math.max(0, reviewDue));
+}
+
+async function refreshReviewQueueMetrics(username) {
+  if (!username) return;
+  try {
+    const threshold = currentThreshold();
+    const floor = currentObjectiveFloor();
+    const winningPrune = currentWinningPrune();
+    const res = await fetch(
+      `/api/stats/${encodeURIComponent(username)}?blunder_threshold=${encodeURIComponent(String(threshold))}&objective_floor_cp=${encodeURIComponent(String(floor))}&winning_prune_cp=${encodeURIComponent(String(winningPrune))}`
+    );
+    if (!res.ok) throw new Error(`stats ${res.status}`);
+    const s = await res.json();
+    setQueueMetricsFromStats(s);
+  } catch (e) {
+    log(`Queue metrics fetch failed: ${e.message}`);
+  }
+}
+
+async function fetchUsers() {
+  const threshold = currentThreshold();
+  const floor = currentObjectiveFloor();
+  const winningPrune = currentWinningPrune();
+  const res = await fetch(
+    `/api/users?blunder_threshold=${encodeURIComponent(String(threshold))}&objective_floor_cp=${encodeURIComponent(String(floor))}&winning_prune_cp=${encodeURIComponent(String(winningPrune))}`
+  );
+  if (!res.ok) throw new Error(`users fetch failed: ${res.status}`);
+  const data = await res.json();
+  usersCache = data.users || [];
+  renderUserCards(usersCache);
+  populateSelect($('userSelectAnalyze'), usersCache);
+  populateSelect($('userSelectReview'), usersCache);
+  populateSelect($('userSelectStats'), usersCache);
+  applyUserStatsToReviewMetrics(activeUsername());
+}
+
+function clearBoardOverlay() {
+  if (!boardOverlayEl) return;
+  if (overlayTimer) clearTimeout(overlayTimer);
+  boardOverlayEl.textContent = '';
+  boardOverlayEl.classList.remove('show', 'success', 'fail');
+}
+
+function clearWrongResetTimer() {
+  if (wrongResetTimer) {
+    clearTimeout(wrongResetTimer);
+    wrongResetTimer = null;
+  }
+}
+
+function autoGradeRating() {
+  const elapsedSec = cardStartedAt ? (Date.now() - cardStartedAt) / 1000 : 0;
+  if (wrongAttemptsThisCard >= 2) return 1;
+  if (wrongAttemptsThisCard === 1) return 2;
+  if (elapsedSec > 10) return 3;
+  return 4;
+}
+
+function scheduleAutoGrade(cardId) {
+  if (!isAutoGradeEnabled()) return;
+  const rating = autoGradeRating();
+  const labels = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
+  setReviewMoveStatus(`Auto ${labels[rating]}...`, 'ok');
+  scheduleNextCardCountdown(cardId, 1, rating);
+}
+
+function scheduleNextCardCountdown(cardId, seconds, rating) {
+  clearAutoProceedTimer();
+  let remaining = Math.max(1, Number(seconds || 1));
+  if (autoNextWrapEl) autoNextWrapEl.hidden = false;
+  if (autoNextTextEl) autoNextTextEl.textContent = `Next card in ${remaining}..`;
+  autoNextTickTimer = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearInterval(autoNextTickTimer);
+      autoNextTickTimer = null;
+      return;
+    }
+    if (autoNextTextEl) autoNextTextEl.textContent = `Next card in ${remaining}..`;
+  }, 1000);
+
+  autoProceedTimer = setTimeout(async () => {
+    autoProceedTimer = null;
+    if (autoNextTickTimer) {
+      clearInterval(autoNextTickTimer);
+      autoNextTickTimer = null;
+    }
+    if (autoNextWrapEl) autoNextWrapEl.hidden = true;
+    if (!currentCard || currentCard.card_id !== cardId) return;
+    try {
+      await gradeCard(rating);
+    } catch (e) {
+      log(`Auto-grade failed: ${e.message}`);
+      setReviewMoveStatus('Auto failed.', 'error');
+    }
+  }, remaining * 1000);
+}
+
+function showBoardOverlay(ok) {
+  if (!boardOverlayEl) return;
+  clearBoardOverlay();
+  boardOverlayEl.textContent = ok ? '✓' : '✕';
+  boardOverlayEl.classList.add('show', ok ? 'success' : 'fail');
+  overlayTimer = setTimeout(clearBoardOverlay, 900);
+}
+
+function recordMoveAttempt(ok) {
+  sessionMetrics.attempts += 1;
+  if (ok) {
+    sessionMetrics.correct += 1;
+    sessionMetrics.streak += 1;
+    sessionMetrics.bestStreak = Math.max(sessionMetrics.bestStreak, sessionMetrics.streak);
+  } else {
+    sessionMetrics.wrong += 1;
+    sessionMetrics.streak = 0;
+  }
+  updateSessionMetricsUI();
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function ensureBoardDeps() {
+  if (!ChessgroundCtor) ChessgroundCtor = (await import('https://esm.sh/@lichess-org/chessground@10.0.2')).Chessground;
+  if (!ChessCtor) ChessCtor = (await import('https://esm.sh/chess.js@1.1.0')).Chess;
+}
+
+function setupBoard(card) {
+  const boardEl = $('board');
+  if (!boardEl) return;
+  if (!cg) {
+    cg = ChessgroundCtor(boardEl, {
+      draggable: { enabled: true, showGhost: true },
+      animation: { enabled: true, duration: 180 },
+      highlight: { lastMove: true, check: true },
+      drawable: { enabled: true, visible: true, autoShapes: [] },
+      movable: { free: false, color: card.side_to_move, events: { after: onMove } },
+    });
+  }
+
+  positionChess = new ChessCtor(card.fen);
+  playedMoveUci = null;
+  moveAttemptRecorded = false;
+  clearBoardOverlay();
+  hidePromotionPicker();
+
+  const legalDests = new Map();
+  for (const m of positionChess.moves({ verbose: true })) {
+    if (!legalDests.has(m.from)) legalDests.set(m.from, []);
+    legalDests.get(m.from).push(m.to);
+  }
+
+  cg.set({
+    fen: card.fen.split(' ').slice(0, 4).join(' '),
+    orientation: card.side_to_move,
+    turnColor: card.side_to_move,
+    drawable: { autoShapes: [] },
+    movable: { color: card.side_to_move, dests: legalDests },
+  });
+  syncBoardArrows();
+}
+
+async function onMove(orig, dest) {
+  if (!positionChess || !currentCard) return;
+  let promotion = undefined;
+  const promoChoices = promotionChoices(orig, dest);
+  if (promoChoices.length) {
+    promotion = await choosePromotionPiece(promoChoices);
+    if (!promotion) return setupBoard(currentCard);
+  }
+
+  const move = positionChess.move({ from: orig, to: dest, promotion });
+  if (!move) return setupBoard(currentCard);
+  playedMoveUci = `${move.from}${move.to}${move.promotion || ''}`;
+  const line = findLineByUci(playedMoveUci);
+  attempts.push({ san: move.san || playedMoveUci, evalCp: line?.cp ?? null });
+  const attemptIdx = attempts.length - 1;
+  const fenAfter = positionChess.fen();
+  if (attempts[attemptIdx].evalCp === null || attempts[attemptIdx].evalCp === undefined) {
+    const cardId = currentCard.card_id;
+    void evaluateFenCp(fenAfter, { depth: 15, povSide: currentCard.side_to_move })
+      .then((cp) => {
+        if (!currentCard || currentCard.card_id !== cardId) return;
+        if (!attempts[attemptIdx]) return;
+        attempts[attemptIdx].evalCp = cp;
+        renderAttempts();
+      })
+      .catch((e) => log(`Eval failed: ${e.message}`));
+  }
+  renderAttempts();
+  const ok = acceptableLineSet().has(playedMoveUci);
+  showBoardOverlay(ok);
+  setReviewMoveStatus(ok ? 'Correct.' : 'Wrong.', ok ? 'ok' : 'error');
+  const cardId = currentCard.card_id;
+  clearWrongResetTimer();
+  void fetchOpponentReplyArrows(fenAfter, cardId).finally(() => {
+    if (!currentCard || currentCard.card_id !== cardId) return;
+    if (!ok) {
+      setReviewMoveStatus('Wrong. Resetting...', 'error');
+      wrongResetTimer = setTimeout(() => {
+        if (!currentCard || currentCard.card_id !== cardId) return;
+        clearBoardDecorations();
+        setupBoard(currentCard);
+        setReviewMoveStatus('Try again.', 'idle');
+      }, 1000);
+    } else {
+      setReviewMoveStatus('Correct.', 'ok');
+      scheduleAutoGrade(cardId);
+    }
+  });
+
+  if (ok) {
+    alternativesShown = false;
+    alternativesUnlocked = false;
+    setShowAlternativesButtonState();
+    answerShown = true;
+    setShowAnswerButtonState();
+    if (answerEvalMetricEl) answerEvalMetricEl.textContent = fmtEval(line?.cp ?? null);
+  } else {
+    wrongAttemptsThisCard += 1;
+  }
+  if (!moveAttemptRecorded) {
+    recordMoveAttempt(ok);
+    moveAttemptRecorded = true;
+  }
+}
+
+async function loadCard() {
+  const username = $('userSelectReview')?.value || selectedUser();
+  if (!username) return setReviewMoveStatus('Pick a user.', 'error');
+  const threshold = currentThreshold();
+  const floor = currentObjectiveFloor();
+  const winningPrune = currentWinningPrune();
+  setSelectedUser(username);
+  await refreshReviewQueueMetrics(username);
+  const res = await fetch(
+    `/api/review/next/${encodeURIComponent(username)}?blunder_threshold=${encodeURIComponent(String(threshold))}&objective_floor_cp=${encodeURIComponent(String(floor))}&winning_prune_cp=${encodeURIComponent(String(winningPrune))}`
+  );
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  if (!data.card) {
+    currentCard = null;
+    cardStartedAt = null;
+    stopCardTimer();
+    tickCardTimer();
+    clearBoardDecorations();
+    clearBoardOverlay();
+    setGradeButtonsDefault();
+    if (infoEl) infoEl.textContent = 'No due cards.';
+    setReviewMoveStatus('No due cards.', 'idle');
+    return;
+  }
+  await ensureBoardDeps();
+  clearWrongResetTimer();
+  currentCard = data.card;
+  setupBoard(currentCard);
+  resetAttemptBox();
+  renderAttempts();
+  setReviewMoveStatus('Your move.', 'idle');
+  await refreshGradePreviewLabels();
+  if (infoEl) infoEl.textContent = '';
+}
+
+async function gradeCard(rating) {
+  if (!currentCard) return;
+  clearWrongResetTimer();
+  stopCardTimer();
+  clearBoardDecorations();
+  const out = await postJson('/api/review/grade', { card_id: currentCard.card_id, rating });
+  sessionMetrics.reviewed += 1;
+  updateSessionMetricsUI();
+  setReviewMoveStatus('Saved.', 'ok');
+  await fetchUsers();
+  await loadCard();
+}
+
+function showAnswer() {
+  if (!currentCard || !positionChess || !cg) return;
+  if (answerShown) {
+    clearWrongResetTimer();
+    clearBoardDecorations();
+    setupBoard(currentCard);
+    answerShown = false;
+    alternativesUnlocked = false;
+    setShowAnswerButtonState();
+    setShowAlternativesButtonState();
+    setReviewMoveStatus('Reset.', 'idle');
+    return;
+  }
+  clearWrongResetTimer();
+  setupBoard(currentCard);
+
+  const acceptable = (currentCard.all_lines || []).filter((l) => acceptableLineSet().has(l.first_move_uci));
+  const best = (acceptable && acceptable[0]) || (currentCard.all_lines && currentCard.all_lines[0]);
+  if (!best?.first_move_uci) {
+    setReviewMoveStatus('No answer.', 'error');
+    return;
+  }
+
+  const uci = best.first_move_uci;
+  const answerLine = findLineByUci(uci);
+  const from = uci.slice(0, 2);
+  const to = uci.slice(2, 4);
+  const promotion = uci.length > 4 ? uci[4] : undefined;
+  const mv = positionChess.move({ from, to, promotion });
+  if (!mv) {
+    setReviewMoveStatus('No answer.', 'error');
+    return;
+  }
+
+  cg.set({
+    fen: positionChess.fen().split(' ').slice(0, 4).join(' '),
+    lastMove: [from, to],
+    drawable: { autoShapes: [] },
+  });
+  playedMoveUci = uci;
+  setReviewMoveStatus(`Answer: ${mv.san || uci}`, 'ok');
+  if (answerEvalMetricEl) answerEvalMetricEl.textContent = fmtEval(answerLine?.cp ?? best?.cp ?? null);
+  alternativesShown = false;
+  alternativesUnlocked = true;
+  setShowAlternativesButtonState();
+  resetOpponentReplyArrows();
+  answerShown = true;
+  setShowAnswerButtonState();
+  const cardId = currentCard.card_id;
+  const fenAfter = positionChess.fen();
+  void fetchOpponentReplyArrows(fenAfter, cardId);
+  scheduleNextCardCountdown(cardId, 5, 1);
+}
+
+function showAlternatives() {
+  if (!currentCard || !cg || !alternativesUnlocked) return;
+  if (answerShown) {
+    clearWrongResetTimer();
+    setupBoard(currentCard);
+    answerShown = false;
+    setShowAnswerButtonState();
+  }
+  alternativesShown = !alternativesShown;
+  setShowAlternativesButtonState();
+  syncBoardArrows();
+  if (alternativesShown) {
+    setReviewMoveStatus(`Alt: ${alternativeShapes().length}`, 'idle');
+  } else {
+    setReviewMoveStatus('Alt off.', 'idle');
+  }
+}
+
+function wireCommon() {
+  window.addEventListener('error', (e) => log(`JS error: ${e.message}`));
+  window.addEventListener('unhandledrejection', (e) => log(`Promise error: ${e.reason?.message || String(e.reason)}`));
+
+  const refreshUsersBtn = $('refreshUsers');
+  if (refreshUsersBtn) {
+    refreshUsersBtn.addEventListener('click', async () => {
+      try {
+        await fetchUsers();
+      } catch (e) {
+        log(`Refresh profiles error: ${e.message}`);
+      }
+    });
+  }
+
+  const selAnalyze = $('userSelectAnalyze');
+  if (selAnalyze) {
+    selAnalyze.addEventListener('change', () => setSelectedUser(selAnalyze.value));
+  }
+  const selReview = $('userSelectReview');
+  if (selReview) {
+    selReview.addEventListener('change', () => {
+      setSelectedUser(selReview.value);
+      loadSessionMetricsForUser(selReview.value);
+      applyUserStatsToReviewMetrics(selReview.value);
+      void refreshReviewQueueMetrics(selReview.value).catch((e) => log(`Queue refresh failed: ${e.message}`));
+      void loadCard().catch((e) => log(`Auto-load user change failed: ${e.message}`));
+    });
+  }
+
+  const sliderMap = [
+    ['depth', 'depthValue'],
+    ['multipv', 'multipvValue'],
+    ['openingSkip', 'openingSkipValue'],
+    ['cpWindow', 'cpWindowValue'],
+    ['blunderCp', 'blunderCpValue'],
+    ['objectiveFloor', 'objectiveFloorValue'],
+    ['winningPrune', 'winningPruneValue'],
+    ['reviewThreshold', 'reviewThresholdValue'],
+    ['reviewObjectiveFloor', 'reviewObjectiveFloorValue'],
+    ['reviewAcceptWindow', 'reviewAcceptWindowValue'],
+    ['reviewWinningPrune', 'reviewWinningPruneValue'],
+    ['statsDays', 'statsDaysValue'],
+  ];
+  for (const [inputId, outId] of sliderMap) {
+    const inp = $(inputId);
+    const out = $(outId);
+    if (!inp || !out) continue;
+    const sync = () => {
+      out.textContent = inp.value;
+    };
+    inp.addEventListener('input', sync);
+    sync();
+  }
+
+  const reviewThreshold = $('reviewThreshold');
+  if (reviewThreshold) {
+    reviewThreshold.addEventListener('change', async () => {
+      try {
+        await fetchUsers();
+        await refreshReviewQueueMetrics($('userSelectReview')?.value || selectedUser());
+        if ($('userSelectReview')?.value) await loadCard();
+      } catch (e) {
+        log(`Threshold update failed: ${e.message}`);
+      }
+    });
+  }
+  const reviewObjectiveFloor = $('reviewObjectiveFloor');
+  if (reviewObjectiveFloor) {
+    reviewObjectiveFloor.addEventListener('change', async () => {
+      try {
+        await fetchUsers();
+        await refreshReviewQueueMetrics($('userSelectReview')?.value || selectedUser());
+        if ($('userSelectReview')?.value) await loadCard();
+      } catch (e) {
+        log(`Eval floor update failed: ${e.message}`);
+      }
+    });
+  }
+  const reviewAcceptWindow = $('reviewAcceptWindow');
+  if (reviewAcceptWindow) {
+    reviewAcceptWindow.addEventListener('change', () => {
+      if (!currentCard) return;
+      syncBoardArrows();
+      setReviewMoveStatus('Window updated.', 'idle');
+    });
+  }
+  const reviewWinningPrune = $('reviewWinningPrune');
+  if (reviewWinningPrune) {
+    reviewWinningPrune.addEventListener('change', async () => {
+      try {
+        await fetchUsers();
+        await refreshReviewQueueMetrics($('userSelectReview')?.value || selectedUser());
+        if ($('userSelectReview')?.value) await loadCard();
+      } catch (e) {
+        log(`Winning prune update failed: ${e.message}`);
+      }
+    });
+  }
+  const winningPrune = $('winningPrune');
+  if (winningPrune) {
+    winningPrune.addEventListener('change', async () => {
+      try {
+        await fetchUsers();
+      } catch (e) {
+        log(`Winning prune update failed: ${e.message}`);
+      }
+    });
+  }
+
+  const reviewSettingsBtn = $('reviewSettingsBtn');
+  if (reviewSettingsBtn) {
+    reviewSettingsBtn.addEventListener('click', () => openReviewSettings());
+  }
+  const reviewSettingsClose = $('reviewSettingsClose');
+  if (reviewSettingsClose) {
+    reviewSettingsClose.addEventListener('click', () => closeReviewSettings());
+  }
+  const reviewSettingsBackdrop = $('reviewSettingsBackdrop');
+  if (reviewSettingsBackdrop) {
+    reviewSettingsBackdrop.addEventListener('click', () => closeReviewSettings());
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeReviewSettings();
+  });
+
+  const autoGradeMode = $('autoGradeMode');
+  if (autoGradeMode) {
+    autoGradeMode.checked = localStorage.getItem(STORAGE_AUTO_GRADE_KEY) === '1';
+    autoGradeMode.addEventListener('change', () => {
+      localStorage.setItem(STORAGE_AUTO_GRADE_KEY, autoGradeMode.checked ? '1' : '0');
+      if (!autoGradeMode.checked) clearAutoProceedTimer();
+    });
+  }
+
+  setImportStatus('Idle');
+  setAnalyzeStatus('Idle');
+  setReviewMoveStatus('Ready.');
+  setEngineStatus('Stockfish: idle.');
+  setShowAnswerButtonState();
+  setShowAlternativesButtonState();
+  updateSessionMetricsUI();
+}
+
+function wireImportPage() {
+  const btnL = $('importLichess');
+  if (btnL) {
+    btnL.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const username = $('lichessUser')?.value.trim();
+      if (!username) return setImportStatus('Enter username.', 'error');
+      setBtnBusy(btn, true, 'Importing...');
+      setImportStatus('Importing... 0 games', 'busy');
+      try {
+        const start = await postJson('/api/import/start', {
+          source: 'lichess',
+          username,
+          max_games: Number($('lichessMax')?.value || 100),
+        });
+        const jobId = start.job_id;
+        let finalOut = null;
+        while (true) {
+          const res = await fetch(`/api/import/progress/${encodeURIComponent(jobId)}`);
+          if (!res.ok) throw new Error(`progress ${res.status}`);
+          const p = await res.json();
+          const done = Number(p.done || 0);
+          const total = Number(p.total || 0);
+          if (total > 0) setImportStatus(`Importing... ${done}/${total} games`, 'busy');
+          else setImportStatus(`Importing... ${done} games`, 'busy');
+          if (p.state === 'done') {
+            finalOut = { imported: Number(p.imported || 0), skipped: Number(p.skipped || 0) };
+            break;
+          }
+          if (p.state === 'error') throw new Error(p.error || 'import failed');
+          await sleep(600);
+        }
+        const out = finalOut || { imported: 0, skipped: 0 };
+        setSelectedUser(username);
+        setImportStatus(`Imported ${out.imported}, skipped ${out.skipped}.`, 'ok');
+        await fetchUsers();
+      } catch (e) {
+        setImportStatus('Import failed.', 'error');
+      } finally {
+        setBtnBusy(btn, false, 'Importing...');
+      }
+    });
+  }
+
+  const btnC = $('importChesscom');
+  if (btnC) {
+    btnC.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const username = $('chesscomUser')?.value.trim();
+      if (!username) return setImportStatus('Enter username.', 'error');
+      setBtnBusy(btn, true, 'Importing...');
+      setImportStatus('Importing... 0 games', 'busy');
+      try {
+        const start = await postJson('/api/import/start', {
+          source: 'chesscom',
+          username,
+          max_games: Number($('chesscomMax')?.value || 200),
+        });
+        const jobId = start.job_id;
+        let finalOut = null;
+        while (true) {
+          const res = await fetch(`/api/import/progress/${encodeURIComponent(jobId)}`);
+          if (!res.ok) throw new Error(`progress ${res.status}`);
+          const p = await res.json();
+          const done = Number(p.done || 0);
+          const total = Number(p.total || 0);
+          if (total > 0) setImportStatus(`Importing... ${done}/${total} games`, 'busy');
+          else setImportStatus(`Importing... ${done} games`, 'busy');
+          if (p.state === 'done') {
+            finalOut = { imported: Number(p.imported || 0), skipped: Number(p.skipped || 0) };
+            break;
+          }
+          if (p.state === 'error') throw new Error(p.error || 'import failed');
+          await sleep(600);
+        }
+        const out = finalOut || { imported: 0, skipped: 0 };
+        setSelectedUser(username);
+        setImportStatus(`Imported ${out.imported}, skipped ${out.skipped}.`, 'ok');
+        await fetchUsers();
+      } catch (e) {
+        setImportStatus('Import failed.', 'error');
+      } finally {
+        setBtnBusy(btn, false, 'Importing...');
+      }
+    });
+  }
+
+  const exportDbBtn = $('exportDbBtn');
+  if (exportDbBtn) {
+    exportDbBtn.addEventListener('click', () => {
+      window.open('/api/db/export', '_blank', 'noopener,noreferrer');
+    });
+  }
+  const importDbBtn = $('importDbBtn');
+  if (importDbBtn) {
+    importDbBtn.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const fileInput = $('importDbFile');
+      const file = fileInput?.files?.[0];
+      if (!file) return setImportStatus('Pick DB file.', 'error');
+      if (!window.confirm('Importing DB will replace current local data. Continue?')) return;
+      setBtnBusy(btn, true, 'Importing DB...');
+      setImportStatus('Importing DB...', 'busy');
+      try {
+        const form = new FormData();
+        form.append('file', file);
+        const res = await fetch('/api/db/import', { method: 'POST', body: form });
+        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+        setImportStatus('DB imported.', 'ok');
+        await fetchUsers();
+      } catch (e) {
+        setImportStatus('DB import failed.', 'error');
+        log(`DB import failed: ${e.message}`);
+      } finally {
+        setBtnBusy(btn, false, 'Importing DB...');
+      }
+    });
+  }
+}
+
+function moveObjToUci(m) {
+  return `${m.from}${m.to}${m.promotion || ''}`;
+}
+
+function uciToMoveObj(uci) {
+  const out = { from: uci.slice(0, 2), to: uci.slice(2, 4) };
+  if (uci.length > 4) out.promotion = uci[4];
+  return out;
+}
+
+function uciLineToSan(fen, pv) {
+  if (!ChessCtor) return '';
+  const b = new ChessCtor(fen);
+  const sans = [];
+  for (const u of (pv || []).slice(0, 10)) {
+    if (!u || u.length < 4) break;
+    const out = b.move(uciToMoveObj(u));
+    if (!out) break;
+    sans.push(out.san);
+  }
+  return sans.join(' ');
+}
+
+async function analyzeSinglePositionWasm(fen, playedUci, sideToMove, cfg) {
+  const infos = await stockfishAnalyze(fen, { depth: cfg.depth, multipv: cfg.multipv });
+  const candidates = [];
+  let bestCp = null;
+  let playedCp = null;
+  for (const info of infos) {
+    const cpFromTurn = scoreToCp(info.score);
+    if (cpFromTurn === null || cpFromTurn === undefined) continue;
+    const cp = scoreForPov(cpFromTurn, fenTurn(fen), sideToMove);
+    if (bestCp === null) bestCp = cp;
+    const first = info.pv?.[0];
+    if (!first) continue;
+    if (first === playedUci) playedCp = cp;
+    candidates.push({
+      pv_rank: Number(info.multipv || 1),
+      cp: Number(cp),
+      first_move_uci: first,
+      uci_line: (info.pv || []).slice(0, 10).join(' '),
+      san_line: uciLineToSan(fen, info.pv || []),
+      is_acceptable: false,
+    });
+  }
+  candidates.sort((a, b) => a.pv_rank - b.pv_rank);
+  if (bestCp === null) bestCp = 0;
+  for (const c of candidates) {
+    c.is_acceptable = (Number(bestCp) - Number(c.cp)) <= cfg.cpWindow;
+  }
+
+  if (playedCp === null || playedCp === undefined) {
+    const b2 = new ChessCtor(fen);
+    const applied = b2.move(uciToMoveObj(playedUci));
+    if (!applied) playedCp = Number(bestCp);
+    else {
+      const replyInfos = await stockfishAnalyze(b2.fen(), { depth: Math.max(6, cfg.depth - 2), multipv: 1 });
+      const r0 = replyInfos[0];
+      const cpFromTurn = r0 ? scoreToCp(r0.score) : null;
+      playedCp = cpFromTurn === null || cpFromTurn === undefined ? Number(bestCp) : -Number(cpFromTurn);
+    }
+  }
+  const lossCp = Number(bestCp) - Number(playedCp);
+  return {
+    bestCp: Number(bestCp),
+    playedCp: Number(playedCp),
+    lossCp: Number(lossCp),
+    candidates,
+  };
+}
+
+async function analyzeGameInBrowser(game, cfg) {
+  if (!ChessCtor) await ensureBoardDeps();
+  const pgnChess = new ChessCtor();
+  const ok = pgnChess.loadPgn(game.pgn, { strict: false });
+  if (!ok) return { positions: [], blunders: 0 };
+  const moves = pgnChess.history({ verbose: true });
+  const board = new ChessCtor();
+  const userSide = game.played_color === 'white' ? 'white' : 'black';
+  let userMoveIndex = 0;
+  let blunders = 0;
+  const positions = [];
+
+  for (let i = 0; i < moves.length; i += 1) {
+    const mv = moves[i];
+    const sideToMove = board.turn() === 'w' ? 'white' : 'black';
+    const moveObj = { from: mv.from, to: mv.to, promotion: mv.promotion };
+    if (sideToMove !== userSide) {
+      board.move(moveObj);
+      continue;
+    }
+    userMoveIndex += 1;
+    if (userMoveIndex <= cfg.openingSkip) {
+      board.move(moveObj);
+      continue;
+    }
+
+    const fen = board.fen();
+    const playedUci = moveObjToUci(mv);
+    const analysis = await analyzeSinglePositionWasm(fen, playedUci, sideToMove, cfg);
+    const isBlunder = analysis.lossCp >= cfg.blunderCp;
+    if (isBlunder) blunders += 1;
+
+    const practical = (() => {
+      const bAfter = new ChessCtor(fen);
+      const userApplied = bAfter.move(moveObj);
+      if (!userApplied) return null;
+      const opp = moves[i + 1];
+      if (!opp) return null;
+      const bResp = new ChessCtor(bAfter.fen());
+      const oppMoveObj = { from: opp.from, to: opp.to, promotion: opp.promotion };
+      const oppApplied = bResp.move(oppMoveObj);
+      if (!oppApplied) return null;
+      return {
+        opponent_move_uci: moveObjToUci(opp),
+        opponent_move_san: opp.san,
+        fen_after: bResp.fen(),
+      };
+    })();
+
+    let cpAfter = null;
+    if (practical) {
+      const infos = await stockfishAnalyze(practical.fen_after, { depth: Math.max(6, cfg.depth - 2), multipv: 1 });
+      const cpFromTurn = infos[0] ? scoreToCp(infos[0].score) : null;
+      cpAfter = scoreForPov(cpFromTurn, fenTurn(practical.fen_after), userSide);
+    }
+
+    positions.push({
+      ply: i + 1,
+      fen,
+      side_to_move: sideToMove,
+      played_uci: playedUci,
+      played_san: mv.san || playedUci,
+      best_cp: analysis.bestCp,
+      played_cp: analysis.playedCp,
+      loss_cp: analysis.lossCp,
+      is_blunder: isBlunder,
+      candidate_lines: analysis.candidates,
+      practical_response: practical
+        ? {
+            opponent_move_uci: practical.opponent_move_uci,
+            opponent_move_san: practical.opponent_move_san,
+            cp_after: cpAfter,
+          }
+        : null,
+    });
+
+    board.move(moveObj);
+  }
+
+  return { positions, blunders };
+}
+
+function wireAnalyzePage() {
+  const analyzeBtn = $('analyzeBtn');
+  if (analyzeBtn) {
+    analyzeBtn.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const username = $('userSelectAnalyze')?.value || selectedUser();
+      if (!username) return setAnalyzeStatus('Pick a user.', 'error');
+      setSelectedUser(username);
+      setBtnBusy(btn, true, 'Analyzing...');
+      setAnalyzeStatus('Analyzing... 0 games', 'busy');
+      try {
+        const cfg = {
+          depth: Number($('depth')?.value || 10),
+          multipv: Number($('multipv')?.value || 4),
+          openingSkip: Number($('openingSkip')?.value || 0),
+          cpWindow: Number($('cpWindow')?.value || 50),
+          blunderCp: Number($('blunderCp')?.value || 200),
+          objectiveFloor: Number($('objectiveFloor')?.value || -200),
+        };
+
+        await ensureBoardDeps();
+        await ensureStockfishWorker();
+        const gamesRes = await fetch(`/api/analyze/games/${encodeURIComponent(username)}?max_games=200`);
+        if (!gamesRes.ok) throw new Error(`games ${gamesRes.status}`);
+        const gamesData = await gamesRes.json();
+        const games = Array.isArray(gamesData.games) ? gamesData.games : [];
+        const total = games.length;
+        if (!total) {
+          setAnalyzeStatus('No unanalyzed games.', 'idle');
+          return;
+        }
+
+        let done = 0;
+        let totalPositions = 0;
+        let totalBlunders = 0;
+        for (const g of games) {
+          setAnalyzeStatus(`Analyzing... ${done}/${total} games`, 'busy');
+          const out = await analyzeGameInBrowser(g, cfg);
+          await postJson('/api/analyze/store-game', {
+            game_id: g.id,
+            positions: out.positions,
+          });
+          done += 1;
+          totalPositions += Number(out.positions.length || 0);
+          totalBlunders += Number(out.blunders || 0);
+          setAnalyzeStatus(`Analyzing... ${done}/${total} games`, 'busy');
+        }
+        const out = { games: done, positions: totalPositions, blunders: totalBlunders };
+        setAnalyzeStatus(`Done: ${out.games}g ${out.positions}p ${out.blunders}b`, 'ok');
+        await fetchUsers();
+      } catch (e) {
+        log(`Analyze failed: ${e.message}`);
+        setAnalyzeStatus('Analyze failed.', 'error');
+      } finally {
+        setBtnBusy(btn, false, 'Analyzing...');
+      }
+    });
+  }
+
+  const flushBtn = $('resetAnalyzeBtn');
+  if (flushBtn) {
+    flushBtn.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const username = $('userSelectAnalyze')?.value || selectedUser();
+      if (!username) return setAnalyzeStatus('Pick a user.', 'error');
+      if (!window.confirm(`Flush all analyzed positions/cards for ${username}?`)) return;
+      setBtnBusy(btn, true, 'Flushing...');
+      setAnalyzeStatus('Flushing...', 'busy');
+      try {
+        const out = await postJson('/api/analyze/reset', { username });
+        setAnalyzeStatus(`Flushed: ${out.positions_deleted} positions.`, 'ok');
+        await fetchUsers();
+      } catch (e) {
+        setAnalyzeStatus('Flush failed.', 'error');
+      } finally {
+        setBtnBusy(btn, false, 'Flushing...');
+      }
+    });
+  }
+}
+
+function wireReviewPage() {
+  const showBtn = $('showAnswer');
+  if (showBtn) showBtn.addEventListener('click', showAnswer);
+  const altBtn = $('showAlternatives');
+  if (altBtn) {
+    alternativesUnlocked = false;
+    setShowAlternativesButtonState();
+    altBtn.addEventListener('click', showAlternatives);
+  }
+  if (autoNextCancelEl) {
+    autoNextCancelEl.addEventListener('click', () => {
+      clearAutoProceedTimer();
+      setReviewMoveStatus('Auto-next canceled.', 'idle');
+    });
+  }
+
+  const lichessBtn = $('openLichessAnalysis');
+  if (lichessBtn) {
+    lichessBtn.addEventListener('click', () => {
+      if (!currentCard?.fen) return;
+      const fenPath = currentCard.fen.replaceAll(' ', '_');
+      window.open(`https://lichess.org/analysis/${fenPath}`, '_blank', 'noopener,noreferrer');
+    });
+  }
+  for (const btn of document.querySelectorAll('.grade')) {
+    btn.addEventListener('click', async () => {
+      try {
+        await gradeCard(Number(btn.dataset.grade));
+      } catch (e) {
+        log(`Grade error: ${e.message}`);
+      }
+    });
+  }
+
+  window.addEventListener('keydown', async (e) => {
+    if (!$('userSelectReview')) return; // review page only
+    const tgt = e.target;
+    const tag = tgt && tgt.tagName ? tgt.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || (tgt && tgt.isContentEditable)) return;
+    if (!currentCard) return;
+
+    // Requested mapping: 1=Again, 2=Good, 3=Hard, 4=Easy
+    const map = { '1': 1, '2': 3, '3': 2, '4': 4 };
+    const rating = map[e.key];
+    if (!rating) return;
+    e.preventDefault();
+    try {
+      await gradeCard(rating);
+    } catch (err) {
+      log(`Shortcut grade error: ${err.message}`);
+    }
+  });
+}
+
+function wireStatsPage() {
+  const sel = $('userSelectStats');
+  if (sel) {
+    sel.addEventListener('change', () => {
+      setSelectedUser(sel.value);
+      void loadStatsPage().catch((e) => log(`Stats load failed: ${e.message}`));
+    });
+  }
+  const days = $('statsDays');
+  if (days) {
+    days.addEventListener('change', () => {
+      void loadStatsPage().catch((e) => log(`Stats load failed: ${e.message}`));
+    });
+  }
+  const refresh = $('statsRefresh');
+  if (refresh) {
+    refresh.addEventListener('click', () => {
+      void loadStatsPage().catch((e) => log(`Stats load failed: ${e.message}`));
+    });
+  }
+}
+
+async function init() {
+  wireCommon();
+  wireImportPage();
+  wireAnalyzePage();
+  wireReviewPage();
+  wireStatsPage();
+
+  try {
+    await fetchUsers();
+  } catch (e) {
+    log(`Initial users load failed: ${e.message}`);
+  }
+
+  const su = selectedUser();
+  if (su) {
+    if ($('userSelectAnalyze')) $('userSelectAnalyze').value = su;
+    if ($('userSelectReview')) {
+      $('userSelectReview').value = su;
+      loadSessionMetricsForUser(su);
+      applyUserStatsToReviewMetrics(su);
+    }
+    if ($('userSelectStats')) $('userSelectStats').value = su;
+  }
+
+  if ($('userSelectReview') && !su) {
+    loadSessionMetricsForUser($('userSelectReview').value || '');
+  }
+
+  if ($('userSelectStats')) {
+    try {
+      await loadStatsPage();
+    } catch (e) {
+      log(`Stats load failed: ${e.message}`);
+    }
+  }
+
+  if ($('userSelectReview')) {
+    try {
+      await loadCard();
+    } catch (e) {
+      setReviewMoveStatus('Load failed.', 'error');
+      log(`Auto-load failed: ${e.message}`);
+    }
+  }
+
+  log('Ready.');
+}
+
+init();
