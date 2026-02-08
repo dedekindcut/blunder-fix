@@ -33,7 +33,7 @@
           <label>Username
             <select id="userSelectReview"></select>
           </label>
-          <button id="reviewSettingsBtn" class="icon-btn" aria-label="Review settings" title="Review settings">&#9881;</button>
+          <button id="reviewSettingsBtn" class="icon-btn" aria-label="Review settings" title="Review settings"><i class="bi bi-gear-fill"></i></button>
         </div>
 
         <div class="review-metrics">
@@ -118,9 +118,21 @@
                 <span class="switch-track"></span>
               </span>
             </label>
-            <label class="switch-label">Opponent Response
+            <label class="switch-label">Play Opponent Response
               <span class="switch">
                 <input id="opponentResponseMode" type="checkbox" />
+                <span class="switch-track"></span>
+              </span>
+            </label>
+            <label class="switch-label">Show Position Eval
+              <span class="switch">
+                <input id="showPositionEval" type="checkbox" />
+                <span class="switch-track"></span>
+              </span>
+            </label>
+            <label class="switch-label">Exclude Lost Positions
+              <span class="switch">
+                <input id="reviewExcludeLost" type="checkbox" />
                 <span class="switch-track"></span>
               </span>
             </label>

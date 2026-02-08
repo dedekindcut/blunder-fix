@@ -9,6 +9,8 @@ const $ = (id) => document.getElementById(id);
 const STORAGE_USER_KEY = 'bf:selectedUser';
 const STORAGE_AUTO_GRADE_KEY = 'bf:autoGradeMode';
 const STORAGE_OPP_RESPONSE_KEY = 'bf:opponentResponseMode';
+const STORAGE_SHOW_POSITION_EVAL_KEY = 'bf:showPositionEval';
+const STORAGE_EXCLUDE_LOST_KEY = 'bf:excludeLostPositions';
 const STORAGE_SEVERITY_FILTER_KEY = 'bf:severityFilter';
 
 const logEl = $('log');
@@ -500,10 +502,15 @@ function applySeverityFilterToDom(filter) {
 
 function severityFilterQuery() {
   const f = severityFilterFromDom();
+  const excludeLost =
+    $('reviewExcludeLost')?.checked ??
+    $('analyzeExcludeLost')?.checked ??
+    (localStorage.getItem(STORAGE_EXCLUDE_LOST_KEY) === '1');
   const q = new URLSearchParams();
   q.set('show_inaccuracy', f.inaccuracy ? '1' : '0');
   q.set('show_mistake', f.mistake ? '1' : '0');
   q.set('show_blunder', f.blunder ? '1' : '0');
+  q.set('exclude_lost', excludeLost ? '1' : '0');
   return q.toString();
 }
 
@@ -538,6 +545,24 @@ function isAutoGradeEnabled() {
 
 function isOpponentResponseEnabled() {
   return Boolean($('opponentResponseMode')?.checked);
+}
+
+function isShowPositionEvalEnabled() {
+  return Boolean($('showPositionEval')?.checked);
+}
+
+function syncPositionEvalMetric() {
+  if (!currentCard) {
+    setAnswerEvalMetric(null);
+    return;
+  }
+  if (isShowPositionEvalEnabled()) {
+    setAnswerEvalMetric(currentCard.best_cp ?? null);
+    return;
+  }
+  if (!answerShown) {
+    setAnswerEvalMetric(null);
+  }
 }
 
 function clearAutoProceedTimer() {
@@ -794,7 +819,7 @@ function resetAttemptBox() {
   clearAutoProceedTimer();
   if (attemptCardIdEl) attemptCardIdEl.textContent = currentCard ? `#${cardHash6(currentCard.card_id)}` : '-';
   setPlayedMoveMetric(currentCard);
-  setAnswerEvalMetric(null);
+  syncPositionEvalMetric();
   if (attemptListEl) attemptListEl.innerHTML = '';
   answerShown = false;
   answerRevealed = false;
@@ -1287,6 +1312,7 @@ function resetToCardPosition() {
       drawable: { autoShapes: [] },
     });
   }
+  syncPositionEvalMetric();
 }
 
 async function onMove(orig, dest) {
@@ -1523,6 +1549,34 @@ function wireCommon() {
       }
     });
   }
+  const excludeLostIds = ['reviewExcludeLost', 'analyzeExcludeLost'];
+  const excludeLostStored = localStorage.getItem(STORAGE_EXCLUDE_LOST_KEY) === '1';
+  for (const id of excludeLostIds) {
+    const el = $(id);
+    if (el) el.checked = excludeLostStored;
+  }
+  for (const id of excludeLostIds) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener('change', async () => {
+      const enabled = Boolean(el.checked);
+      localStorage.setItem(STORAGE_EXCLUDE_LOST_KEY, enabled ? '1' : '0');
+      for (const peerId of excludeLostIds) {
+        const peer = $(peerId);
+        if (peer) peer.checked = enabled;
+      }
+      try {
+        await fetchUsers();
+        const ru = $('userSelectReview')?.value || selectedUser();
+        if (ru) {
+          await refreshReviewQueueMetrics(ru);
+          if ($('userSelectReview')) await loadCard();
+        }
+      } catch (e) {
+        log(`Lost-position filter update failed: ${e.message}`);
+      }
+    });
+  }
 
   const sliderMap = [
     ['depth', 'depthValue'],
@@ -1621,12 +1675,21 @@ function wireCommon() {
       }
     });
   }
+  const showPositionEval = $('showPositionEval');
+  if (showPositionEval) {
+    showPositionEval.checked = localStorage.getItem(STORAGE_SHOW_POSITION_EVAL_KEY) === '1';
+    showPositionEval.addEventListener('change', () => {
+      localStorage.setItem(STORAGE_SHOW_POSITION_EVAL_KEY, showPositionEval.checked ? '1' : '0');
+      syncPositionEvalMetric();
+    });
+  }
 
   setImportStatus('Idle');
   setAnalyzeStatus('Idle');
   setReviewMoveStatus('Ready.');
   setEngineStatus('Stockfish: idle.');
   setShowAnswerButtonState();
+  syncPositionEvalMetric();
   updateSessionMetricsUI();
 }
 
@@ -1717,6 +1780,33 @@ function wireImportPage() {
         await fetchUsers();
       } catch (e) {
         setImportStatus('Import failed.', 'error');
+      } finally {
+        setBtnBusy(btn, false, 'Importing...');
+      }
+    });
+  }
+
+  const btnPgn = $('importPgn');
+  if (btnPgn) {
+    btnPgn.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const fileInput = $('pgnFile');
+      const file = fileInput?.files?.[0];
+      if (!file) return setImportStatus('Pick PGN file.', 'error');
+      setBtnBusy(btn, true, 'Importing...');
+      setImportStatus('Importing PGN...', 'busy');
+      try {
+        const form = new FormData();
+        form.append('file', file);
+        const res = await fetch('/api/import/pgn', { method: 'POST', body: form });
+        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+        const out = await res.json();
+        if (out?.username) setSelectedUser(out.username);
+        setImportStatus(`Imported ${Number(out?.imported || 0)}, skipped ${Number(out?.skipped || 0)}.`, 'ok');
+        await fetchUsers();
+      } catch (e) {
+        setImportStatus('PGN import failed.', 'error');
+        log(`PGN import failed: ${e.message}`);
       } finally {
         setBtnBusy(btn, false, 'Importing...');
       }

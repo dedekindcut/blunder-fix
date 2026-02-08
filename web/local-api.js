@@ -53,7 +53,27 @@ function parseSeverityFilter(url) {
     inaccuracy: parseBoolQ(url, 'show_inaccuracy', false),
     mistake: parseBoolQ(url, 'show_mistake', false),
     blunder: parseBoolQ(url, 'show_blunder', true),
+    exclude_lost: parseBoolQ(url, 'exclude_lost', false),
   };
+}
+
+function inferJudgementLegacy(p) {
+  const existing = String(p?.judgement || '').toLowerCase();
+  if (existing === 'blunder' || existing === 'mistake' || existing === 'inaccuracy') return existing;
+  if (Number(p?.is_blunder || 0) > 0) return 'blunder';
+  const d = Number(p?.winning_chance_delta);
+  if (Number.isFinite(d)) {
+    if (d >= 0.3) return 'blunder';
+    if (d >= 0.2) return 'mistake';
+    if (d >= 0.1) return 'inaccuracy';
+  }
+  const cp = Number(p?.loss_cp);
+  if (Number.isFinite(cp)) {
+    if (cp > 200) return 'blunder';
+    if (cp >= 100) return 'mistake';
+    if (cp > 0) return 'inaccuracy';
+  }
+  return '';
 }
 
 function lower(s) {
@@ -104,7 +124,10 @@ async function loadState() {
   if (Array.isArray(stateCache.positions)) {
     for (const p of stateCache.positions) {
       if (!p || typeof p !== 'object') continue;
-      if (!p.judgement && Number(p.is_blunder || 0) > 0) p.judgement = 'blunder';
+      if (!p.judgement) {
+        const inferred = inferJudgementLegacy(p);
+        if (inferred) p.judgement = inferred;
+      }
       if (p.winning_chance_delta === undefined || p.winning_chance_delta === null) p.winning_chance_delta = 0;
       if (Object.prototype.hasOwnProperty.call(p, 'is_blunder')) delete p.is_blunder;
     }
@@ -148,6 +171,58 @@ function resultFromPgn(pgn, playedColor) {
   if (r === '0-1') return playedColor === 'black' ? 'win' : 'loss';
   if (r === '1/2-1/2') return 'draw';
   return 'unknown';
+}
+
+function profileFromFilename(name) {
+  const raw = String(name || '').replace(/\.[^.]+$/, '').trim();
+  const cleaned = raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return lower(cleaned || 'pgn-import');
+}
+
+function splitPgnGames(text) {
+  const src = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!src) return [];
+  return src
+    .split(/\n{2,}(?=\[(?:Event|Site|Round|White|Black|Result)\s+")/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function hashString32(text) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h.toString(36);
+}
+
+function primaryPlayerFromPgnGames(games) {
+  const counts = new Map();
+  for (const pgn of games) {
+    const h = parsePgnHeaders(pgn);
+    const white = lower(h.White || '');
+    const black = lower(h.Black || '');
+    if (white) counts.set(white, (counts.get(white) || 0) + 1);
+    if (black) counts.set(black, (counts.get(black) || 0) + 1);
+  }
+  let best = '';
+  let bestCount = -1;
+  for (const [name, count] of counts) {
+    if (count > bestCount) {
+      best = name;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+function playedColorFromHeadersWithPrimary(pgn, primaryPlayer) {
+  if (!primaryPlayer) return 'white';
+  const h = parsePgnHeaders(pgn);
+  if (lower(h.White || '') === primaryPlayer) return 'white';
+  if (lower(h.Black || '') === primaryPlayer) return 'black';
+  return 'white';
 }
 
 function addDaysTs(baseTs, days) {
@@ -252,14 +327,13 @@ function getPositionsByGameIds(gameIds) {
 }
 
 function positionJudgement(p) {
-  const j = String(p?.judgement || '').toLowerCase();
-  if (j === 'blunder' || j === 'mistake' || j === 'inaccuracy') return j;
-  return '';
+  return inferJudgementLegacy(p);
 }
 
 function matchesPositionFilter(p, severity) {
   const j = positionJudgement(p);
   if (!j) return false;
+  if (severity.exclude_lost && Number(p?.best_cp ?? 0) <= -200) return false;
   const okClass = (j === 'blunder' && severity.blunder) || (j === 'mistake' && severity.mistake) || (j === 'inaccuracy' && severity.inaccuracy);
   if (!okClass) return false;
   return true;
@@ -490,30 +564,78 @@ async function handleImportClearAll() {
   });
 }
 
+async function handleImportPgn(options) {
+  const form = options?.body instanceof FormData ? options.body : null;
+  const file = form ? form.get('file') : null;
+  if (!file) return toJsonResponse({ detail: 'Missing file' }, 400);
+  const text = await file.text();
+  const games = splitPgnGames(text);
+  if (!games.length) return toJsonResponse({ detail: 'No PGN games found' }, 400);
+
+  const username = profileFromFilename(file.name || 'pgn-import');
+  const primaryPlayer = primaryPlayerFromPgnGames(games);
+  let imported = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < games.length; i += 1) {
+    const pgn = games[i];
+    const headers = parsePgnHeaders(pgn);
+    const baseId = String(headers.Site || headers.Link || headers.LichessURL || headers['Chess.com'] || '');
+    const sourceGameId = baseId || `pgn-${hashString32(pgn)}`;
+    const exists = stateCache.games.some((x) => x.source === 'pgn' && lower(x.username) === username && x.source_game_id === sourceGameId);
+    if (exists) {
+      skipped += 1;
+      continue;
+    }
+    const playedColor = playedColorFromHeadersWithPrimary(pgn, primaryPlayer);
+    stateCache.games.push({
+      id: nextId('game'),
+      source: 'pgn',
+      source_game_id: sourceGameId,
+      username,
+      played_color: playedColor,
+      result: resultFromPgn(pgn, playedColor),
+      pgn,
+      analyzed: 0,
+      created_at: nowIsoUtc(),
+    });
+    imported += 1;
+  }
+
+  await saveState();
+  return toJsonResponse({ username, imported, skipped, total: games.length });
+}
+
 function computeUserStats(username, severity) {
   const u = lower(username);
   const gameIds = getGameIdsByUser(u);
   const positions = getPositionsByGameIds(gameIds);
   const posById = new Map(positions.map((p) => [p.id, p]));
   const now = sqlTsToDate(nowIsoUtc()).getTime();
+  const learningCutoff = now + (24 * 60 * 60 * 1000);
   const cards = stateCache.cards.filter((c) => posById.has(c.position_id));
 
   const matches = (p) => matchesPositionFilter(p, severity);
   const blunders = positions.filter(matches).length;
-  const dueCards = cards.filter((c) => {
+  const dueCardsNow = cards.filter((c) => {
     const p = posById.get(c.position_id);
     return p && matches(p) && sqlTsToDate(c.due_at).getTime() <= now;
   });
-  const wrongDue = dueCards.filter((c) => Number(c.reps || 0) > 0 && ['learning', 'relearning'].includes(String(c.state))).length;
-  const reviewDue = dueCards.filter((c) => Number(c.reps || 0) > 0 && String(c.state) === 'review').length;
-  const newDue = dueCards.filter((c) => Number(c.reps || 0) === 0).length;
+  const wrongDue = cards.filter((c) => {
+    const p = posById.get(c.position_id);
+    if (!p || !matches(p)) return false;
+    if (!(Number(c.reps || 0) > 0 && ['learning', 'relearning'].includes(String(c.state)))) return false;
+    return sqlTsToDate(c.due_at).getTime() <= learningCutoff;
+  }).length;
+  const reviewDue = dueCardsNow.filter((c) => Number(c.reps || 0) > 0 && String(c.state) === 'review').length;
+  const newDue = dueCardsNow.filter((c) => Number(c.reps || 0) === 0).length;
 
   return {
     username: u,
     games: gameIds.length,
     positions: positions.length,
     blunders,
-    due_cards: dueCards.length,
+    due_cards: newDue + wrongDue + reviewDue,
     wrong_due_cards: wrongDue,
     learn_due_cards: wrongDue,
     review_due_cards: reviewDue,
@@ -864,6 +986,7 @@ async function routeApi(url, options = {}) {
   const body = options.body && !(options.body instanceof FormData) ? JSON.parse(options.body) : null;
 
   if (path === '/api/import/start' && method === 'POST') return handleImportStart(body || {});
+  if (path === '/api/import/pgn' && method === 'POST') return handleImportPgn(options);
   if (path.startsWith('/api/import/progress/') && method === 'GET') return handleImportProgress(path.split('/').pop() || '');
   if (path === '/api/import/clear-all' && method === 'POST') return handleImportClearAll();
 
