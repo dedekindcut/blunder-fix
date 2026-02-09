@@ -906,12 +906,13 @@ function answerLineShapes() {
 
 function computeBoardShapes() {
   const shapes = [];
-  if (!answerRevealed && !isHidePlayedMoveEnabled() && currentCard) {
+  const showOpponentArrows = ((!isOpponentResponseEnabled() || answerRevealed) && opponentReplyShapes.length > 0);
+  if (!showOpponentArrows && !answerRevealed && !isHidePlayedMoveEnabled() && currentCard) {
     const shape = playedMoveShape(currentCard);
     if (shape) shapes.push(shape);
   }
   if (answerRevealed) shapes.push(...answerLineShapes());
-  if ((!isOpponentResponseEnabled() || answerRevealed) && opponentReplyShapes.length) shapes.push(...opponentReplyShapes);
+  if (showOpponentArrows) shapes.push(...opponentReplyShapes);
   return shapes;
 }
 
@@ -1631,6 +1632,9 @@ async function onMove(orig, dest) {
 async function loadCard() {
   const username = $('userSelectReview')?.value || selectedUser();
   if (!username) return setReviewMoveStatus('Pick a user.', 'error');
+  // Invalidate any in-flight reply-arrow requests from the previous card.
+  replyRequestSeq += 1;
+  opponentReplyShapes = [];
   const severityQ = severityFilterQuery();
   setSelectedUser(username);
   await refreshReviewQueueMetrics(username);
