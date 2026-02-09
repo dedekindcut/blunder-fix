@@ -55,6 +55,11 @@
           <div class="board-shell">
             <div id="board" class="board"></div>
             <div id="boardOverlay" class="board-overlay" aria-live="polite"></div>
+            <div id="boardDoneOverlay" class="board-done-overlay" hidden>
+              <strong>Congratulations!</strong>
+              <span>You have finished this deck for now.</span>
+              <span id="boardDoneOverlayExtra" class="done-extra" hidden></span>
+            </div>
             <div id="promotionPicker" class="promotion-picker" hidden>
               <button type="button" data-piece="q">Q</button>
               <button type="button" data-piece="r">R</button>
@@ -83,15 +88,17 @@
               </div>
             </div>
             <div class="review-side-actions">
-              <button id="showAnswer"><i class="btn-icon bi bi-eye"></i><span>Show Answer</span></button>
+              <div class="review-answer-row">
+                <button id="showAnswer"><i class="btn-icon bi bi-eye"></i><span>Show Answer</span></button>
+                <div id="autoNextWrap" class="auto-next" hidden>
+                  <span id="autoNextText">Next card in 5..4..3..2</span>
+                  <button id="autoNextCancel" type="button" class="danger-btn"><i class="btn-icon bi bi-x-circle"></i><span>Cancel</span></button>
+                </div>
+              </div>
               <button id="openLichessAnalysis"><i class="btn-icon bi bi-box-arrow-up-right"></i><span>Open in Lichess Analysis</span></button>
               <button id="viewSourceGame" hidden><i class="btn-icon bi bi-journal-text"></i><span>View Game</span></button>
             </div>
             <p id="engineStatus" class="status">Stockfish: idle.</p>
-            <div id="autoNextWrap" class="auto-next" hidden>
-              <span id="autoNextText">Next card in 5..4..3..2</span>
-              <button id="autoNextCancel" type="button" class="danger-btn"><i class="btn-icon bi bi-x-circle"></i><span>Cancel</span></button>
-            </div>
             <p id="reviewMoveStatus" class="status">Your move.</p>
           </div>
         </div>

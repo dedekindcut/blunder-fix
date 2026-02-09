@@ -649,7 +649,6 @@ function computeUserStats(username, severity) {
   const positions = getPositionsByGameIds(gameIds);
   const posById = new Map(positions.map((p) => [p.id, p]));
   const now = sqlTsToDate(nowIsoUtc()).getTime();
-  const learningCutoff = now + (24 * 60 * 60 * 1000);
   const cards = stateCache.cards.filter((c) => posById.has(c.position_id));
 
   const matches = (p) => matchesPositionFilter(p, severity);
@@ -662,7 +661,7 @@ function computeUserStats(username, severity) {
     const p = posById.get(c.position_id);
     if (!p || !matches(p)) return false;
     if (!(Number(c.reps || 0) > 0 && ['learning', 'relearning'].includes(String(c.state)))) return false;
-    return sqlTsToDate(c.due_at).getTime() <= learningCutoff;
+    return sqlTsToDate(c.due_at).getTime() <= now;
   }).length;
   const reviewDue = dueCardsNow.filter((c) => Number(c.reps || 0) > 0 && String(c.state) === 'review').length;
   const newDue = dueCardsNow.filter((c) => Number(c.reps || 0) === 0).length;

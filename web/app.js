@@ -24,6 +24,7 @@ const analyzeErrorsEl = $('analyzeErrors');
 const reviewMoveStatusEl = $('reviewMoveStatus');
 const engineStatusEl = $('engineStatus');
 const boardOverlayEl = $('boardOverlay');
+const boardDoneOverlayEl = $('boardDoneOverlay');
 const userCardsEl = $('userCards');
 
 const metricReviewedEl = $('metricReviewed');
@@ -905,7 +906,7 @@ function answerLineShapes() {
 
 function computeBoardShapes() {
   const shapes = [];
-  if (!isHidePlayedMoveEnabled() && currentCard) {
+  if (!answerRevealed && !isHidePlayedMoveEnabled() && currentCard) {
     const shape = playedMoveShape(currentCard);
     if (shape) shapes.push(shape);
   }
@@ -1054,6 +1055,18 @@ function setGradeButtonsDefault() {
   for (const btn of document.querySelectorAll('.grade')) {
     const rating = Number(btn.dataset.grade || 0);
     btn.textContent = gradeBaseLabels[rating] || btn.textContent;
+  }
+}
+
+function setReviewControlsEnabled(enabled) {
+  const on = Boolean(enabled);
+  const ids = ['showAnswer', 'openLichessAnalysis', 'viewSourceGame', 'autoNextCancel'];
+  for (const id of ids) {
+    const el = $(id);
+    if (el) el.disabled = !on;
+  }
+  for (const btn of document.querySelectorAll('.grade')) {
+    btn.disabled = !on;
   }
 }
 
@@ -1335,6 +1348,19 @@ function clearBoardOverlay() {
   );
 }
 
+function setBoardDoneOverlay(visible, subtitle = '', extra = '') {
+  if (!boardDoneOverlayEl) return;
+  const subEl = boardDoneOverlayEl.querySelector('span');
+  if (subEl) subEl.textContent = subtitle || 'You have finished this deck for now.';
+  const extraEl = $('boardDoneOverlayExtra');
+  if (extraEl) {
+    const txt = String(extra || '').trim();
+    extraEl.textContent = txt;
+    extraEl.hidden = !txt;
+  }
+  boardDoneOverlayEl.hidden = !visible;
+}
+
 function clearWrongResetTimer() {
   if (wrongResetTimer) {
     clearTimeout(wrongResetTimer);
@@ -1437,6 +1463,7 @@ async function ensureBoardDeps() {
 function setupBoard(card) {
   const boardEl = $('board');
   if (!boardEl) return;
+  setBoardDoneOverlay(false);
   void applyPieceSet();
   applyBoardTheme();
   if (!cg) {
@@ -1622,10 +1649,32 @@ async function loadCard() {
     const viewSourceBtn = $('viewSourceGame');
     if (viewSourceBtn) viewSourceBtn.hidden = true;
     setGradeButtonsDefault();
-    if (infoEl) infoEl.textContent = 'No due cards.';
-    setReviewMoveStatus('No due cards.', 'idle');
+    setReviewControlsEnabled(false);
+    const excludeLost = $('reviewExcludeLost')?.checked || localStorage.getItem(STORAGE_EXCLUDE_LOST_KEY) === '1';
+    let note = 'No due cards.';
+    let doneSub = 'You have finished this deck for now.';
+    let doneExtra = '';
+    if (excludeLost) {
+      try {
+        const q = new URLSearchParams(severityQ);
+        q.set('exclude_lost', '0');
+        const sRes = await fetch(`/api/stats/${encodeURIComponent(username)}?${q.toString()}`);
+        if (sRes.ok) {
+          const s = await sRes.json();
+          const hiddenDue = Number(s?.due_cards || 0);
+          if (hiddenDue > 0) {
+            note = 'No due cards with current filters.';
+            doneExtra = `${hiddenDue} lost positions hidden.`;
+          }
+        }
+      } catch {}
+    }
+    if (infoEl) infoEl.textContent = note;
+    setBoardDoneOverlay(true, doneSub, doneExtra);
+    setReviewMoveStatus(note, 'idle');
     return;
   }
+  setBoardDoneOverlay(false);
   await ensureBoardDeps();
   clearWrongResetTimer();
   currentCard = data.card;
@@ -1645,6 +1694,7 @@ async function loadCard() {
   resetAttemptBox();
   setupBoard(currentCard);
   renderAttempts();
+  setReviewControlsEnabled(true);
   setReviewMoveStatus('Your move.', 'idle');
   await refreshGradePreviewLabels();
   if (infoEl) infoEl.textContent = '';
@@ -1929,6 +1979,7 @@ function wireCommon() {
   setReviewMoveStatus('Ready.');
   setEngineStatus('Stockfish: idle.');
   setShowAnswerButtonState();
+  setReviewControlsEnabled(false);
   syncPositionEvalMetric();
   updateSessionMetricsUI();
 }
