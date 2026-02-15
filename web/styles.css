@@ -118,6 +118,16 @@ a {
   font-size: 1rem;
 }
 
+.onboarding-panel {
+  padding: 1.05rem;
+}
+
+.panel-note {
+  margin: -0.25rem 0 0.8rem;
+  color: #9fb3cc;
+  font-size: 0.84rem;
+}
+
 .row {
   display: flex;
   align-items: end;
@@ -521,6 +531,41 @@ button:disabled {
 .analyze-actions-row {
   margin-top: 0.65rem;
   align-items: center;
+}
+
+.step-next-row {
+  margin-top: 0.5rem;
+}
+
+.step-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.35rem;
+  padding: 0.62rem 1rem;
+  font-size: 0.96rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  border-radius: 999px;
+  border: 1px solid rgba(158, 212, 255, 0.55);
+  color: #f2f9ff;
+  background: linear-gradient(150deg, #3f8dff, #2f6ed6 60%, #285bba);
+  box-shadow: 0 8px 18px rgba(40, 94, 186, 0.38);
+}
+
+.step-cta-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+.import-main-row label {
+  min-width: 180px;
+}
+
+.import-pgn-row {
+  margin-top: 0.2rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(173, 197, 228, 0.16);
 }
 
 .metric-card {
@@ -955,13 +1000,42 @@ button:disabled {
 .board-overlay {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: clamp(2.1rem, 9vw, 4.6rem);
   font-weight: 900;
   opacity: 0;
   pointer-events: none;
   transition: opacity 140ms ease;
+  text-align: center;
+}
+
+.board-overlay-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.22rem;
+  width: 100%;
+}
+
+.board-overlay-main {
+  line-height: 1;
+  text-align: center;
+}
+
+.board-overlay-sub {
+  display: block;
+  width: 100%;
+  max-width: 92%;
+  text-align: center;
+  font-size: clamp(1.05rem, 3.4vw, 1.45rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  opacity: 0.96;
+  line-height: 1.1;
 }
 
 .board-overlay.show {

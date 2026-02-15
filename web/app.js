@@ -8,10 +8,13 @@ let ChessCtor = null;
 const $ = (id) => document.getElementById(id);
 const STORAGE_USER_KEY = 'bf:selectedUser';
 const STORAGE_AUTO_GRADE_KEY = 'bf:autoGradeMode';
+const STORAGE_AUTO_NEXT_KEY = 'bf:autoNextMode';
+const STORAGE_AUTO_NEXT_DELAY_KEY = 'bf:autoNextDelaySec';
 const STORAGE_OPP_RESPONSE_KEY = 'bf:opponentResponseMode';
 const STORAGE_SHOW_POSITION_EVAL_KEY = 'bf:showPositionEval';
 const STORAGE_HIDE_PLAYED_MOVE_KEY = 'bf:hidePlayedMove';
 const STORAGE_EXCLUDE_LOST_KEY = 'bf:excludeLostPositions';
+const STORAGE_LOST_THRESHOLD_CP_KEY = 'bf:lostThresholdCp';
 const STORAGE_BOARD_THEME_KEY = 'bf:boardTheme';
 const STORAGE_PIECE_SET_KEY = 'bf:pieceSet';
 const STORAGE_SEVERITY_FILTER_KEY = 'bf:severityFilter';
@@ -68,6 +71,8 @@ let autoProceedTimer = null;
 let cardTimerInterval = null;
 let promotionRequestSeq = 0;
 let autoNextTickTimer = null;
+let autoNextButtonMode = 'cancel';
+let manualNextCardId = null;
 let sfWorker = null;
 let sfInitPromise = null;
 let sfQueue = Promise.resolve();
@@ -564,11 +569,21 @@ function severityFilterQuery() {
     $('reviewExcludeLost')?.checked ??
     $('analyzeExcludeLost')?.checked ??
     (localStorage.getItem(STORAGE_EXCLUDE_LOST_KEY) === '1');
+  const lostCp = (() => {
+    const rv = $('reviewLostThreshold')?.value;
+    const av = $('analyzeLostThreshold')?.value;
+    const p = Number(rv ?? av);
+    if (Number.isFinite(p)) return Math.round(p * 100);
+    const cpStored = Number(localStorage.getItem(STORAGE_LOST_THRESHOLD_CP_KEY) || -200);
+    if (Number.isFinite(cpStored)) return Math.round(cpStored);
+    return -200;
+  })();
   const q = new URLSearchParams();
   q.set('show_inaccuracy', f.inaccuracy ? '1' : '0');
   q.set('show_mistake', f.mistake ? '1' : '0');
   q.set('show_blunder', f.blunder ? '1' : '0');
   q.set('exclude_lost', excludeLost ? '1' : '0');
+  q.set('lost_floor_cp', String(lostCp));
   return q.toString();
 }
 
@@ -599,6 +614,17 @@ async function loadSessionMetricsForUser(username) {
 
 function isAutoGradeEnabled() {
   return Boolean($('autoGradeMode')?.checked);
+}
+
+function isAutoNextEnabled() {
+  return Boolean($('autoNextMode')?.checked);
+}
+
+function autoNextDelaySeconds() {
+  const slider = $('autoNextDelay');
+  const v = slider ? Number(slider.value || 3) : Number(localStorage.getItem(STORAGE_AUTO_NEXT_DELAY_KEY) || 3);
+  if (!Number.isFinite(v)) return 3;
+  return Math.max(1, Math.min(15, Math.round(v)));
 }
 
 function isOpponentResponseEnabled() {
@@ -704,6 +730,8 @@ function clearAutoProceedTimer() {
     autoNextTickTimer = null;
   }
   if (autoNextWrapEl) autoNextWrapEl.hidden = true;
+  manualNextCardId = null;
+  setAutoNextButtonMode('cancel');
 }
 
 function fmtEval(cp) {
@@ -1378,15 +1406,16 @@ function autoGradeRating() {
 }
 
 function scheduleAutoGrade(cardId) {
-  if (!isAutoGradeEnabled()) return;
+  if (!isAutoGradeEnabled() || !isAutoNextEnabled()) return;
   const rating = autoGradeRating();
   const labels = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
   setReviewMoveStatus(`Auto ${labels[rating]}...`, 'ok');
-  scheduleNextCardCountdown(cardId, 1, rating);
+  scheduleNextCardCountdown(cardId, autoNextDelaySeconds(), rating);
 }
 
 function scheduleNextCardCountdown(cardId, seconds, rating) {
   clearAutoProceedTimer();
+  setAutoNextButtonMode('cancel');
   let remaining = Math.max(1, Number(seconds || 1));
   if (autoNextWrapEl) autoNextWrapEl.hidden = false;
   if (autoNextTextEl) autoNextTextEl.textContent = `Next card in ${remaining}..`;
@@ -1417,10 +1446,35 @@ function scheduleNextCardCountdown(cardId, seconds, rating) {
   }, remaining * 1000);
 }
 
-function showBoardOverlay(ok) {
+function setAutoNextButtonMode(mode) {
+  autoNextButtonMode = mode === 'next' ? 'next' : 'cancel';
+  if (!autoNextCancelEl) return;
+  if (autoNextButtonMode === 'next') {
+    autoNextCancelEl.classList.remove('danger-btn');
+    autoNextCancelEl.innerHTML = '<i class="btn-icon bi bi-arrow-right-circle"></i><span>Next</span>';
+  } else {
+    autoNextCancelEl.classList.add('danger-btn');
+    autoNextCancelEl.innerHTML = '<i class="btn-icon bi bi-x-circle"></i><span>Cancel</span>';
+  }
+}
+
+function showManualNext(cardId) {
+  clearAutoProceedTimer();
+  manualNextCardId = Number(cardId || 0);
+  setAutoNextButtonMode('next');
+  if (autoNextWrapEl) autoNextWrapEl.hidden = false;
+  if (autoNextTextEl) autoNextTextEl.textContent = 'Answer shown.';
+}
+
+function showBoardOverlay(ok, evalCp = null) {
   if (!boardOverlayEl) return;
   clearBoardOverlay();
-  boardOverlayEl.textContent = ok ? '✓' : '✕';
+  const evalTxt = fmtEval(evalCp);
+  if (ok) {
+    boardOverlayEl.innerHTML = `<div class="board-overlay-content"><span class="board-overlay-main">✓</span><span class="board-overlay-sub">${evalTxt}</span></div>`;
+  } else {
+    boardOverlayEl.innerHTML = `<div class="board-overlay-content"><span class="board-overlay-main">✕</span><span class="board-overlay-sub">${evalTxt}</span></div>`;
+  }
   boardOverlayEl.classList.add('show', ok ? 'success' : 'fail');
   overlayTimer = setTimeout(clearBoardOverlay, 900);
 }
@@ -1574,7 +1628,7 @@ async function onMove(orig, dest) {
       log(`Eval failed: ${e.message}`);
     }
   }
-  showBoardOverlay(ok);
+  showBoardOverlay(ok, attempts[attemptIdx]?.evalCp ?? null);
   setReviewMoveStatus(ok ? 'Correct.' : 'Wrong.', ok ? 'ok' : 'error');
   clearWrongResetTimer();
   void (inOppPhase ? Promise.resolve(false) : fetchOpponentReplyArrows(fenAfter, cardId)).finally(() => {
@@ -1766,7 +1820,7 @@ function showAnswer() {
   const cardId = currentCard.card_id;
   const fenAfter = positionChess.fen();
   void fetchOpponentReplyArrows(fenAfter, cardId);
-  scheduleNextCardCountdown(cardId, 5, 1);
+  showManualNext(cardId);
 }
 
 function wireCommon() {
@@ -1844,13 +1898,59 @@ function wireCommon() {
       }
     });
   }
+  const lostThresholdIds = ['reviewLostThreshold', 'analyzeLostThreshold'];
+  const storedLostCp = Number(localStorage.getItem(STORAGE_LOST_THRESHOLD_CP_KEY) || -200);
+  const storedLostPawns = Number.isFinite(storedLostCp) ? Math.max(-8, Math.min(0, Number((storedLostCp / 100).toFixed(1)))) : -2;
+  for (const id of lostThresholdIds) {
+    const el = $(id);
+    if (!el) continue;
+    el.value = String(storedLostPawns.toFixed(1));
+  }
+  const syncLostThresholdLabels = () => {
+    const reviewV = Number($('reviewLostThreshold')?.value);
+    const analyzeV = Number($('analyzeLostThreshold')?.value);
+    const v = Number.isFinite(reviewV) ? reviewV : (Number.isFinite(analyzeV) ? analyzeV : storedLostPawns);
+    const outR = $('reviewLostThresholdValue');
+    const outA = $('analyzeLostThresholdValue');
+    if (outR) outR.textContent = v.toFixed(1);
+    if (outA) outA.textContent = v.toFixed(1);
+  };
+  syncLostThresholdLabels();
+  for (const id of lostThresholdIds) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener('input', async () => {
+      const p = Number(el.value || -2);
+      const clamped = Number.isFinite(p) ? Math.max(-8, Math.min(0, p)) : -2;
+      const cp = Math.round(clamped * 100);
+      localStorage.setItem(STORAGE_LOST_THRESHOLD_CP_KEY, String(cp));
+      for (const peerId of lostThresholdIds) {
+        const peer = $(peerId);
+        if (peer && peer !== el) peer.value = clamped.toFixed(1);
+      }
+      syncLostThresholdLabels();
+      try {
+        await fetchUsers();
+        const ru = $('userSelectReview')?.value || selectedUser();
+        if (ru) {
+          await refreshReviewQueueMetrics(ru);
+          if ($('userSelectReview')) await loadCard();
+        }
+      } catch (e) {
+        log(`Lost threshold update failed: ${e.message}`);
+      }
+    });
+  }
 
   const sliderMap = [
     ['depth', 'depthValue'],
     ['multipv', 'multipvValue'],
     ['openingSkip', 'openingSkipValue'],
     ['cpWindow', 'cpWindowValue'],
+    ['analyzeLostThreshold', 'analyzeLostThresholdValue'],
+    ['autoNextDelay', 'autoNextDelayValue'],
     ['reviewAcceptWindow', 'reviewAcceptWindowValue'],
+    ['reviewLostThreshold', 'reviewLostThresholdValue'],
     ['statsDays', 'statsDaysValue'],
   ];
   for (const [inputId, outId] of sliderMap) {
@@ -1931,6 +2031,26 @@ function wireCommon() {
       if (!autoGradeMode.checked) clearAutoProceedTimer();
     });
   }
+  const autoNextMode = $('autoNextMode');
+  if (autoNextMode) {
+    const stored = localStorage.getItem(STORAGE_AUTO_NEXT_KEY);
+    autoNextMode.checked = stored === null ? true : stored === '1';
+    autoNextMode.addEventListener('change', () => {
+      localStorage.setItem(STORAGE_AUTO_NEXT_KEY, autoNextMode.checked ? '1' : '0');
+      if (!autoNextMode.checked) clearAutoProceedTimer();
+    });
+  }
+  const autoNextDelay = $('autoNextDelay');
+  if (autoNextDelay) {
+    const storedDelay = Number(localStorage.getItem(STORAGE_AUTO_NEXT_DELAY_KEY) || 3);
+    const clamped = Number.isFinite(storedDelay) ? Math.max(1, Math.min(15, Math.round(storedDelay))) : 3;
+    autoNextDelay.value = String(clamped);
+    const out = $('autoNextDelayValue');
+    if (out) out.textContent = String(clamped);
+    autoNextDelay.addEventListener('input', () => {
+      localStorage.setItem(STORAGE_AUTO_NEXT_DELAY_KEY, String(autoNextDelay.value));
+    });
+  }
   const opponentResponseMode = $('opponentResponseMode');
   if (opponentResponseMode) {
     opponentResponseMode.checked = localStorage.getItem(STORAGE_OPP_RESPONSE_KEY) === '1';
@@ -1989,6 +2109,17 @@ function wireCommon() {
 }
 
 function wireImportPage() {
+  const importNextWrap = $('importNextWrap');
+  const goAnalyzeBtn = $('goAnalyzeBtn');
+  const setImportNextVisible = (visible) => {
+    if (importNextWrap) importNextWrap.hidden = !visible;
+  };
+  if (goAnalyzeBtn) {
+    goAnalyzeBtn.addEventListener('click', () => {
+      window.location.href = './analyze.html';
+    });
+  }
+
   const renderImportProgress = (p) => {
     const msg = String(p?.message || '').trim();
     if (msg) {
@@ -2001,43 +2132,67 @@ function wireImportPage() {
     else setImportStatus(`Importing... ${done} games`, 'busy');
   };
 
+  const runUserImport = async ({ source, username, maxGames, btn }) => {
+    if (!username) return setImportStatus('Enter username.', 'error');
+    setImportNextVisible(false);
+    setBtnBusy(btn, true, 'Importing...');
+    setImportStatus('Importing... 0 games', 'busy');
+    try {
+      const start = await postJson('/api/import/start', {
+        source,
+        username,
+        max_games: Number(maxGames || 100),
+      });
+      const jobId = start.job_id;
+      let finalOut = null;
+      while (true) {
+        const res = await fetch(`/api/import/progress/${encodeURIComponent(jobId)}`);
+        if (!res.ok) throw new Error(`progress ${res.status}`);
+        const p = await res.json();
+        renderImportProgress(p);
+        if (p.state === 'done') {
+          finalOut = { imported: Number(p.imported || 0), skipped: Number(p.skipped || 0) };
+          break;
+        }
+        if (p.state === 'error') throw new Error(p.error || 'import failed');
+        await sleep(600);
+      }
+      const out = finalOut || { imported: 0, skipped: 0 };
+      setSelectedUser(username);
+      setImportStatus(`Imported ${out.imported}, skipped ${out.skipped}.`, 'ok');
+      await fetchUsers();
+      setImportNextVisible(true);
+    } catch (e) {
+      setImportStatus('Import failed.', 'error');
+      log(`Import failed: ${e.message}`);
+      setImportNextVisible(false);
+    } finally {
+      setBtnBusy(btn, false, 'Importing...');
+    }
+  };
+
+  const importGamesBtn = $('importGamesBtn');
+  if (importGamesBtn) {
+    importGamesBtn.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const source = String($('importSource')?.value || 'lichess').toLowerCase() === 'chesscom' ? 'chesscom' : 'lichess';
+      const username = $('importUser')?.value.trim();
+      const maxGames = Number($('importMax')?.value || 100);
+      await runUserImport({ source, username, maxGames, btn });
+    });
+  }
+
   const btnL = $('importLichess');
   if (btnL) {
     btnL.addEventListener('click', async (ev) => {
       const btn = ev.currentTarget;
       const username = $('lichessUser')?.value.trim();
-      if (!username) return setImportStatus('Enter username.', 'error');
-      setBtnBusy(btn, true, 'Importing...');
-      setImportStatus('Importing... 0 games', 'busy');
-      try {
-        const start = await postJson('/api/import/start', {
-          source: 'lichess',
-          username,
-          max_games: Number($('lichessMax')?.value || 100),
-        });
-        const jobId = start.job_id;
-        let finalOut = null;
-        while (true) {
-          const res = await fetch(`/api/import/progress/${encodeURIComponent(jobId)}`);
-          if (!res.ok) throw new Error(`progress ${res.status}`);
-          const p = await res.json();
-          renderImportProgress(p);
-          if (p.state === 'done') {
-            finalOut = { imported: Number(p.imported || 0), skipped: Number(p.skipped || 0) };
-            break;
-          }
-          if (p.state === 'error') throw new Error(p.error || 'import failed');
-          await sleep(600);
-        }
-        const out = finalOut || { imported: 0, skipped: 0 };
-        setSelectedUser(username);
-        setImportStatus(`Imported ${out.imported}, skipped ${out.skipped}.`, 'ok');
-        await fetchUsers();
-      } catch (e) {
-        setImportStatus('Import failed.', 'error');
-      } finally {
-        setBtnBusy(btn, false, 'Importing...');
-      }
+      await runUserImport({
+        source: 'lichess',
+        username,
+        maxGames: Number($('lichessMax')?.value || 100),
+        btn,
+      });
     });
   }
 
@@ -2046,38 +2201,33 @@ function wireImportPage() {
     btnC.addEventListener('click', async (ev) => {
       const btn = ev.currentTarget;
       const username = $('chesscomUser')?.value.trim();
-      if (!username) return setImportStatus('Enter username.', 'error');
-      setBtnBusy(btn, true, 'Importing...');
-      setImportStatus('Importing... 0 games', 'busy');
-      try {
-        const start = await postJson('/api/import/start', {
-          source: 'chesscom',
-          username,
-          max_games: Number($('chesscomMax')?.value || 100),
-        });
-        const jobId = start.job_id;
-        let finalOut = null;
-        while (true) {
-          const res = await fetch(`/api/import/progress/${encodeURIComponent(jobId)}`);
-          if (!res.ok) throw new Error(`progress ${res.status}`);
-          const p = await res.json();
-          renderImportProgress(p);
-          if (p.state === 'done') {
-            finalOut = { imported: Number(p.imported || 0), skipped: Number(p.skipped || 0) };
-            break;
-          }
-          if (p.state === 'error') throw new Error(p.error || 'import failed');
-          await sleep(600);
-        }
-        const out = finalOut || { imported: 0, skipped: 0 };
-        setSelectedUser(username);
-        setImportStatus(`Imported ${out.imported}, skipped ${out.skipped}.`, 'ok');
-        await fetchUsers();
-      } catch (e) {
-        setImportStatus('Import failed.', 'error');
-      } finally {
-        setBtnBusy(btn, false, 'Importing...');
-      }
+      await runUserImport({
+        source: 'chesscom',
+        username,
+        maxGames: Number($('chesscomMax')?.value || 100),
+        btn,
+      });
+    });
+  }
+
+  const importSource = $('importSource');
+  const importUser = $('importUser');
+  if (importSource && importUser) {
+    const syncLegacyInputs = () => {
+      const v = importUser.value.trim();
+      const lichessUser = $('lichessUser');
+      const chesscomUser = $('chesscomUser');
+      if (lichessUser) lichessUser.value = v;
+      if (chesscomUser) chesscomUser.value = v;
+    };
+    importUser.addEventListener('input', syncLegacyInputs);
+    syncLegacyInputs();
+    importSource.addEventListener('change', () => {
+      const source = String(importSource.value || 'lichess');
+      const maxInput = $('importMax');
+      if (!maxInput) return;
+      const legacyMax = source === 'chesscom' ? Number($('chesscomMax')?.value || 100) : Number($('lichessMax')?.value || 100);
+      maxInput.value = String(legacyMax);
     });
   }
 
@@ -2088,6 +2238,7 @@ function wireImportPage() {
       const fileInput = $('pgnFile');
       const file = fileInput?.files?.[0];
       if (!file) return setImportStatus('Pick PGN file.', 'error');
+      setImportNextVisible(false);
       setBtnBusy(btn, true, 'Importing...');
       setImportStatus('Importing PGN...', 'busy');
       try {
@@ -2099,9 +2250,11 @@ function wireImportPage() {
         if (out?.username) setSelectedUser(out.username);
         setImportStatus(`Imported ${Number(out?.imported || 0)}, skipped ${Number(out?.skipped || 0)}.`, 'ok');
         await fetchUsers();
+        setImportNextVisible(true);
       } catch (e) {
         setImportStatus('PGN import failed.', 'error');
         log(`PGN import failed: ${e.message}`);
+        setImportNextVisible(false);
       } finally {
         setBtnBusy(btn, false, 'Importing...');
       }
@@ -2392,6 +2545,17 @@ async function analyzeGameInBrowser(game, cfg) {
 }
 
 function wireAnalyzePage() {
+  const analyzeNextWrap = $('analyzeNextWrap');
+  const goReviewBtn = $('goReviewBtn');
+  const setAnalyzeNextVisible = (visible) => {
+    if (analyzeNextWrap) analyzeNextWrap.hidden = !visible;
+  };
+  if (goReviewBtn) {
+    goReviewBtn.addEventListener('click', () => {
+      window.location.href = './review.html';
+    });
+  }
+
   const analyzeBtn = $('analyzeBtn');
   if (analyzeBtn) {
     analyzeBtn.addEventListener('click', async (ev) => {
@@ -2399,6 +2563,7 @@ function wireAnalyzePage() {
       const username = $('userSelectAnalyze')?.value || selectedUser();
       if (!username) return setAnalyzeStatus('Pick a user.', 'error');
       setSelectedUser(username);
+      setAnalyzeNextVisible(false);
       setBtnBusy(btn, true, 'Analyzing...');
       setAnalyzeStatus('Analyzing... 0 games', 'busy');
       setAnalyzeErrors('', 'idle');
@@ -2419,6 +2584,7 @@ function wireAnalyzePage() {
         const total = games.length;
         if (!total) {
           setAnalyzeStatus('No unanalyzed games.', 'idle');
+          setAnalyzeNextVisible(true);
           return;
         }
 
@@ -2456,10 +2622,12 @@ function wireAnalyzePage() {
           setAnalyzeErrors('', 'idle');
         }
         await fetchUsers();
+        setAnalyzeNextVisible(true);
       } catch (e) {
         log(`Analyze failed: ${e.message}`);
         setAnalyzeStatus('Analyze failed.', 'error');
         setAnalyzeErrors(String(e?.message || 'Analyze failed.'), 'error');
+        setAnalyzeNextVisible(false);
       } finally {
         setBtnBusy(btn, false, 'Analyzing...');
       }
@@ -2505,6 +2673,11 @@ function wireReviewPage() {
   if (showBtn) showBtn.addEventListener('click', showAnswer);
   if (autoNextCancelEl) {
     autoNextCancelEl.addEventListener('click', () => {
+      if (autoNextButtonMode === 'next') {
+        if (!currentCard || Number(currentCard.card_id || 0) !== Number(manualNextCardId || 0)) return;
+        void gradeCard(1).catch((e) => log(`Next failed: ${e.message}`));
+        return;
+      }
       clearAutoProceedTimer();
       setReviewMoveStatus('Auto-next canceled.', 'idle');
     });

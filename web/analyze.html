@@ -25,13 +25,19 @@
         </nav>
       </header>
 
-      <section class="glass-panel">
+      <section class="glass-panel onboarding-panel">
         <h2>Analysis Controls</h2>
+        <p class="panel-note">Pick one profile, choose depth and classes, then run analysis.</p>
         <div class="row analyze-user-row">
           <label>Username
             <select id="userSelectAnalyze"></select>
           </label>
-          <button id="analyzeSettingsBtn" class="icon-btn" aria-label="Analyze settings" title="Analyze settings"><i class="bi bi-gear-fill"></i></button>
+        </div>
+        <div class="row wrap analyze-controls-row">
+          <label class="range-field">
+            <span class="range-head"><span>Depth</span><span class="slider-value" id="depthValue">10</span></span>
+            <input id="depth" type="range" value="10" min="4" max="24" step="1" />
+          </label>
         </div>
         <div class="row wrap analyze-controls-row">
           <label class="severity-filter">Include
@@ -47,59 +53,10 @@
         <p id="engineStatus" class="status">Stockfish: idle.</p>
         <div class="row analyze-actions-row">
           <button id="analyzeBtn">Analyze</button>
-          <button id="resetAnalyzeBtn" class="danger-btn">Clear Analysis Data</button>
         </div>
-      </section>
-
-      <div id="analyzeSettingsOverlay" class="settings-overlay" hidden>
-        <div id="analyzeSettingsBackdrop" class="settings-backdrop"></div>
-        <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="analyzeSettingsTitle">
-          <div class="settings-head">
-            <h2 id="analyzeSettingsTitle">Analysis Settings</h2>
-            <button id="analyzeSettingsClose" class="icon-btn" aria-label="Close settings" title="Close">&#10005;</button>
-          </div>
-          <div class="settings-grid">
-          <label class="switch-label">Exclude Lost Positions
-            <span class="switch">
-              <input id="analyzeExcludeLost" type="checkbox" />
-              <span class="switch-track"></span>
-            </span>
-          </label>
-          <label class="range-field">
-            <span class="range-head"><span>Depth</span><span class="slider-value" id="depthValue">10</span></span>
-            <input id="depth" type="range" value="10" min="4" max="24" step="1" />
-          </label>
-          <label class="range-field">
-            <span class="range-head"><span>Number of Lines</span><span class="slider-value" id="multipvValue">4</span></span>
-            <input id="multipv" type="range" value="4" min="1" max="12" step="1" />
-          </label>
-          <label class="range-field">
-            <span class="range-head"><span>Skip Opening Moves</span><span class="slider-value" id="openingSkipValue">8</span></span>
-            <input id="openingSkip" type="range" value="8" min="0" max="40" step="1" />
-          </label>
-          <label class="range-field">
-            <span class="range-head"><span>Accept Window (cp)</span><span class="slider-value" id="cpWindowValue">30</span></span>
-            <input id="cpWindow" type="range" value="30" min="0" max="300" step="5" />
-          </label>
+        <div id="analyzeNextWrap" class="row step-next-row" hidden>
+          <button id="goReviewBtn" class="step-cta-btn"><span>Review Games</span><i class="btn-icon bi bi-arrow-right-circle"></i></button>
         </div>
-        </section>
-      </div>
-
-      <div id="analyzeClearOverlay" class="settings-overlay" hidden>
-        <div id="analyzeClearBackdrop" class="settings-backdrop"></div>
-        <section class="confirm-panel" role="dialog" aria-modal="true" aria-labelledby="analyzeClearTitle">
-          <h2 id="analyzeClearTitle">Clear Analysis Data?</h2>
-          <p>This removes all analyzed positions and cards for the selected profile.</p>
-          <div class="confirm-actions">
-            <button id="analyzeClearCancel">Cancel</button>
-            <button id="analyzeClearConfirm" class="danger-btn">Clear</button>
-          </div>
-        </section>
-      </div>
-
-      <section class="glass-panel">
-        <h2>Imported Profiles</h2>
-        <div id="userCards" class="profiles-grid"></div>
       </section>
 
     </main>

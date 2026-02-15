@@ -54,6 +54,7 @@ function parseSeverityFilter(url) {
     mistake: parseBoolQ(url, 'show_mistake', false),
     blunder: parseBoolQ(url, 'show_blunder', true),
     exclude_lost: parseBoolQ(url, 'exclude_lost', false),
+    lost_floor_cp: parseIntQ(url, 'lost_floor_cp', -200),
   };
 }
 
@@ -333,7 +334,7 @@ function positionJudgement(p) {
 function matchesPositionFilter(p, severity) {
   const j = positionJudgement(p);
   if (!j) return false;
-  if (severity.exclude_lost && Number(p?.best_cp ?? 0) <= -200) return false;
+  if (severity.exclude_lost && Number(p?.best_cp ?? 0) <= Number(severity?.lost_floor_cp ?? -200)) return false;
   const okClass = (j === 'blunder' && severity.blunder) || (j === 'mistake' && severity.mistake) || (j === 'inaccuracy' && severity.inaccuracy);
   if (!okClass) return false;
   return true;

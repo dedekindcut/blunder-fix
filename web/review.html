@@ -125,6 +125,16 @@
                 <span class="switch-track"></span>
               </span>
             </label>
+            <label class="switch-label">Auto-Next
+              <span class="switch">
+                <input id="autoNextMode" type="checkbox" />
+                <span class="switch-track"></span>
+              </span>
+            </label>
+            <label class="range-field">
+              <span class="range-head"><span>Auto-Next Delay (s)</span><span class="slider-value" id="autoNextDelayValue">3</span></span>
+              <input id="autoNextDelay" type="range" value="3" min="1" max="15" step="1" />
+            </label>
             <label class="switch-label">Play Opponent Response
               <span class="switch">
                 <input id="opponentResponseMode" type="checkbox" />
@@ -148,6 +158,10 @@
                 <input id="reviewExcludeLost" type="checkbox" />
                 <span class="switch-track"></span>
               </span>
+            </label>
+            <label class="range-field">
+              <span class="range-head"><span>Lost Threshold (pawns)</span><span class="slider-value" id="reviewLostThresholdValue">-2.0</span></span>
+              <input id="reviewLostThreshold" type="range" value="-2.0" min="-8.0" max="0.0" step="0.1" />
             </label>
             <label>Board Theme
               <select id="reviewBoardTheme">
